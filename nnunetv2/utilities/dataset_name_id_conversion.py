@@ -72,3 +72,5 @@ def maybe_convert_to_dataset_name(dataset_name_or_id: Union[int, str]) -> str:
                              "convert it to a dataset ID (int). That failed, however. Please give an integer number "
                              "('1', '2', etc) or a correct dataset name. Your input: %s" % dataset_name_or_id)
     return convert_id_to_dataset_name(dataset_name_or_id)
+
+convert_id_to_dataset_name(2)
