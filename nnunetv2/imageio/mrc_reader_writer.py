@@ -32,7 +32,8 @@ class MRCIO(BaseReaderWriter):
     supported_file_endings = [
         '.mrc',
         '.mrcs',
-        '.rec'
+        '.rec',
+        '.map'
     ]
 
     def read_images(self, image_fnames: Union[List[str], Tuple[str, ...]]) -> Tuple[np.ndarray, dict]:

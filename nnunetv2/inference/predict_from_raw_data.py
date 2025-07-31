@@ -64,6 +64,88 @@ class nnUNetPredictor(object):
         self.device = device
         self.perform_everything_on_device = perform_everything_on_device
 
+    def initialize_from_trained_files(
+        self,
+        dataset_json_path: str,
+        plans_json_path: str,
+        checkpoint_paths: Union[str, List[str]],
+        trainer_name: Optional[str] = None,
+        configuration_name: Optional[str] = None,
+        inference_allowed_mirroring_axes: Optional[Tuple[int, ...]] = None,
+    ):
+        """
+        Initialize predictor from explicit file paths.
+
+        Args:
+            dataset_json_path:      Path to dataset.json
+            plans_json_path:        Path to plans.json
+            checkpoint_paths:       单个 checkpoint 路径或 checkpoint 路径列表
+            trainer_name:           可选，覆盖 checkpoint 中的 trainer_name
+            configuration_name:     可选，覆盖 checkpoint 中的 configuration
+            inference_allowed_mirroring_axes: 可选，覆盖 checkpoint 中的翻转策略
+        """
+        # —— 支持单字符串 —— 
+        if isinstance(checkpoint_paths, str):
+            checkpoint_paths = [checkpoint_paths]
+
+        # 1. 加载 JSON 与 PlansManager
+        dataset_json = load_json(dataset_json_path)
+        plans = load_json(plans_json_path)
+        plans_manager = PlansManager(plans)
+
+        # 2. 从 checkpoints 中提取权重、trainer 和 configuration
+        parameters = []
+        for idx, ckpt_path in enumerate(checkpoint_paths):
+            ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+            if idx == 0:
+                trainer_name = trainer_name or ckpt["trainer_name"]
+                configuration_name = configuration_name or ckpt["init_args"]["configuration"]
+                inference_allowed_mirroring_axes = (
+                    inference_allowed_mirroring_axes
+                    or ckpt.get("inference_allowed_mirroring_axes", None)
+                )
+            parameters.append(ckpt["network_weights"])
+
+        # 3. 根据 configuration 构建网络
+        config_mgr = plans_manager.get_configuration(configuration_name)
+        num_inputs = determine_num_input_channels(plans_manager, config_mgr, dataset_json)
+        num_heads  = plans_manager.get_label_manager(dataset_json).num_segmentation_heads
+
+        trainer_cls = recursive_find_python_class(join(nnunetv2.__path__[0], "training", "nnUNetTrainer"),
+            trainer_name, "nnunetv2.training.nnUNetTrainer",
+        )
+        if trainer_cls is None:
+            raise RuntimeError(f"Cannot find trainer class {trainer_name}")
+
+        net = trainer_cls.build_network_architecture(
+            config_mgr.network_arch_class_name,
+            config_mgr.network_arch_init_kwargs,
+            config_mgr.network_arch_init_kwargs_req_import,
+            num_inputs,
+            num_heads,
+            enable_deep_supervision=False,
+        )
+
+        # 4. 赋值到 self
+        self.plans_manager           = plans_manager
+        self.configuration_manager   = config_mgr
+        self.list_of_parameters      = parameters
+        self.network                 = net
+        self.dataset_json            = dataset_json
+        self.trainer_name            = trainer_name
+        self.allowed_mirroring_axes  = inference_allowed_mirroring_axes
+        self.label_manager           = plans_manager.get_label_manager(dataset_json)
+
+        # 5. 加载首个 fold 的权重并编译（如果需要）
+        net.load_state_dict(parameters[0])
+        if (
+            "nnUNet_compile" in os.environ
+            and os.environ["nnUNet_compile"].lower() in ("true", "1", "t")
+            and not isinstance(net, OptimizedModule)
+        ):
+            print("Using torch.compile")
+            self.network = torch.compile(net)
+
     def initialize_from_trained_model_folder(self, model_training_output_dir: str,
                                              use_folds: Union[Tuple[Union[int, str]], None],
                                              checkpoint_name: str = 'checkpoint_final.pth'):
