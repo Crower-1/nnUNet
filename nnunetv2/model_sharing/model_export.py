@@ -40,6 +40,10 @@ def export_pretrained_model(dataset_name_or_id: Union[int, str], output_file: st
                 for chk in save_checkpoints:
                     source_file = join(trainer_output_dir, fold_folder, chk)
                     zipf.write(source_file, os.path.relpath(source_file, nnUNet_results))
+                for mod_file in ("encoder.pth", "decoder.pth", "head.pth"):
+                    source_file = join(trainer_output_dir, fold_folder, mod_file)
+                    if isfile(source_file):
+                        zipf.write(source_file, os.path.relpath(source_file, nnUNet_results))
 
                 # progress.png
                 source_file = join(trainer_output_dir, fold_folder, "progress.png")
