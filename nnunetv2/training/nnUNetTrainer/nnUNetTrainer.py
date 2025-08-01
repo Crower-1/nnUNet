@@ -109,6 +109,8 @@ class nnUNetTrainer(object):
         # need. So let's save the init args
         self.my_init_kwargs = {}
         for k in inspect.signature(nnUNetTrainer.__init__).parameters.keys():
+            if k == 'self':
+                continue
             self.my_init_kwargs[k] = locals()[k]
 
         ###  Saving all the init args into class variables for later access
