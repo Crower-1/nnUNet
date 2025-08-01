@@ -2,6 +2,7 @@ import multiprocessing
 import os
 import socket
 from typing import Union, Optional
+import inspect
 
 import nnunetv2
 import torch.cuda
@@ -34,7 +35,11 @@ def get_trainer_from_args(dataset_name_or_id: Union[int, str],
                           fold: int,
                           trainer_name: str = 'nnUNetTrainer',
                           plans_identifier: str = 'nnUNetPlans',
-                          device: torch.device = torch.device('cuda')):
+                          device: torch.device = torch.device('cuda'),
+                          finetune_mode: str = 'scratch',
+                          encoder_weights: str | None = None,
+                          decoder_weights: str | None = None,
+                          head_weights: str | None = None):
     # load nnunet class and do sanity checks
     nnunet_trainer = recursive_find_python_class(join(nnunetv2.__path__[0], "training", "nnUNetTrainer"),
                                                 trainer_name, 'nnunetv2.training.nnUNetTrainer')
@@ -62,8 +67,17 @@ def get_trainer_from_args(dataset_name_or_id: Union[int, str],
     plans_file = join(preprocessed_dataset_folder_base, plans_identifier + '.json')
     plans = load_json(plans_file)
     dataset_json = load_json(join(preprocessed_dataset_folder_base, 'dataset.json'))
+    init_params = inspect.signature(nnunet_trainer.__init__).parameters
+    extra = {}
+    if 'finetune_mode' in init_params:
+        extra = {
+            'finetune_mode': finetune_mode,
+            'encoder_weights': encoder_weights,
+            'decoder_weights': decoder_weights,
+            'head_weights': head_weights,
+        }
     nnunet_trainer = nnunet_trainer(plans=plans, configuration=configuration, fold=fold,
-                                    dataset_json=dataset_json, device=device)
+                                    dataset_json=dataset_json, device=device, **extra)
     return nnunet_trainer
 
 
@@ -108,11 +122,17 @@ def cleanup_ddp():
 
 
 def run_ddp(rank, dataset_name_or_id, configuration, fold, tr, p, disable_checkpointing, c, val,
-            pretrained_weights, npz, val_with_best, world_size):
+            pretrained_weights, npz, val_with_best, world_size,
+            finetune_mode, encoder_weights, decoder_weights, head_weights):
     setup_ddp(rank, world_size)
     torch.cuda.set_device(torch.device('cuda', dist.get_rank()))
 
-    nnunet_trainer = get_trainer_from_args(dataset_name_or_id, configuration, fold, tr, p)
+    nnunet_trainer = get_trainer_from_args(dataset_name_or_id, configuration, fold, tr, p,
+                                           device=torch.device('cuda', dist.get_rank()),
+                                           finetune_mode=finetune_mode,
+                                           encoder_weights=encoder_weights,
+                                           decoder_weights=decoder_weights,
+                                           head_weights=head_weights)
 
     if disable_checkpointing:
         nnunet_trainer.disable_checkpointing = disable_checkpointing
@@ -139,6 +159,10 @@ def run_training(dataset_name_or_id: Union[str, int],
                  trainer_class_name: str = 'nnUNetTrainer',
                  plans_identifier: str = 'nnUNetPlans',
                  pretrained_weights: Optional[str] = None,
+                 finetune_mode: str = 'scratch',
+                 encoder_weights: str | None = None,
+                 decoder_weights: str | None = None,
+                 head_weights: str | None = None,
                  num_gpus: int = 1,
                  export_validation_probabilities: bool = False,
                  continue_training: bool = False,
@@ -185,12 +209,26 @@ def run_training(dataset_name_or_id: Union[str, int],
                      pretrained_weights,
                      export_validation_probabilities,
                      val_with_best,
-                     num_gpus),
+                     num_gpus,
+                     finetune_mode,
+                     encoder_weights,
+                     decoder_weights,
+                     head_weights),
                  nprocs=num_gpus,
                  join=True)
     else:
-        nnunet_trainer = get_trainer_from_args(dataset_name_or_id, configuration, fold, trainer_class_name,
-                                               plans_identifier, device=device)
+        nnunet_trainer = get_trainer_from_args(
+            dataset_name_or_id,
+            configuration,
+            fold,
+            trainer_class_name,
+            plans_identifier,
+            device=device,
+            finetune_mode=finetune_mode,
+            encoder_weights=encoder_weights,
+            decoder_weights=decoder_weights,
+            head_weights=head_weights,
+        )
 
         if disable_checkpointing:
             nnunet_trainer.disable_checkpointing = disable_checkpointing
@@ -227,6 +265,14 @@ def run_training_entry():
     parser.add_argument('-pretrained_weights', type=str, required=False, default=None,
                         help='[OPTIONAL] path to nnU-Net checkpoint file to be used as pretrained model. Will only '
                              'be used when actually training. Beta. Use with caution.')
+    parser.add_argument('--finetune_mode', type=str, default='scratch', required=False,
+                        help='[OPTIONAL] Finetuning mode: scratch, head, decoder_head or all')
+    parser.add_argument('--encoder_weights', type=str, default=None, required=False,
+                        help='[OPTIONAL] path to encoder weights for fine-tuning')
+    parser.add_argument('--decoder_weights', type=str, default=None, required=False,
+                        help='[OPTIONAL] path to decoder weights for fine-tuning')
+    parser.add_argument('--head_weights', type=str, default=None, required=False,
+                        help='[OPTIONAL] path to head weights for fine-tuning')
     parser.add_argument('-num_gpus', type=int, default=1, required=False,
                         help='Specify the number of GPUs to use for training')
     parser.add_argument('--npz', action='store_true', required=False,
@@ -264,9 +310,25 @@ def run_training_entry():
     else:
         device = torch.device('mps')
 
-    run_training(args.dataset_name_or_id, args.configuration, args.fold, args.tr, args.p, args.pretrained_weights,
-                 args.num_gpus, args.npz, args.c, args.val, args.disable_checkpointing, args.val_best,
-                 device=device)
+    run_training(
+        args.dataset_name_or_id,
+        args.configuration,
+        args.fold,
+        args.tr,
+        args.p,
+        args.pretrained_weights,
+        finetune_mode=args.finetune_mode,
+        encoder_weights=args.encoder_weights,
+        decoder_weights=args.decoder_weights,
+        head_weights=args.head_weights,
+        num_gpus=args.num_gpus,
+        export_validation_probabilities=args.npz,
+        continue_training=args.c,
+        only_run_validation=args.val,
+        disable_checkpointing=args.disable_checkpointing,
+        val_with_best=args.val_best,
+        device=device,
+    )
 
 
 if __name__ == '__main__':

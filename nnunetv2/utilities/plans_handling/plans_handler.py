@@ -42,6 +42,8 @@ class ConfigurationManager(object):
             unet_class_name = self.configuration["UNet_class_name"]
             if unet_class_name == "PlainConvUNet":
                 network_class_name = "dynamic_network_architectures.architectures.unet.PlainConvUNet"
+            elif unet_class_name == "PlainConvUNetHead":
+                network_class_name = "nnunetv2.network_architecture.plainconv_unet_head.PlainConvUNetHead"
             elif unet_class_name == 'ResidualEncoderUNet':
                 network_class_name = "dynamic_network_architectures.architectures.residual_unet.ResidualEncoderUNet"
             else:

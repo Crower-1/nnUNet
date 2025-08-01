@@ -77,6 +77,17 @@ Specify the checkpoint in PATH_TO_CHECKPOINT.
 
 When loading pretrained weights, all layers except the segmentation layers will be used! 
 
-So far there are no specific nnUNet trainers for fine tuning, so the current recommendation is to just use 
-nnUNetTrainer. You can however easily write your own trainers with learning rate ramp up, fine-tuning of segmentation 
-heads or shorter training time.
+Starting with version 2.6, nnU-Net ships with a dedicated `nnUNetTrainerFinetune` that simplifies common
+fine-tuning scenarios. It supports four modes which control which parts of the network are trained:
+
+- `scratch`: train the full network from random initialization.
+- `head`: freeze encoder and decoder and only train the segmentation head.
+- `decoder_head`: freeze the encoder and train decoder plus head.
+- `all`: load weights for all modules and train everything.
+
+Pretrained weights for the encoder, decoder and head can be provided individually using the
+`--encoder_weights`, `--decoder_weights` and `--head_weights` command line arguments of `nnUNetv2_train`.
+The chosen mode is passed via `--finetune_mode`.
+
+During training additional files `encoder.pth`, `decoder.pth` and `head.pth` are written next to the regular
+checkpoints. These can be reused to build a library of pretrained components.
