@@ -11,8 +11,13 @@ By default, only 'ribo' results are saved. To save other outputs, include them i
 Coordinate file (.coords) is always generated.
 Opening operation is off by default; enable with --do_opening.
 """
-import argparse
 import os
+
+# os.environ["nnUNet_raw"] = "/home/liushuo/Documents/data/nnUNet/"
+# os.environ["nnUNet_preprocessed"] = "/home/liushuo/Documents/data/nnUNet/"
+# os.environ["nnUNet_results"] = "/home/liushuo/Documents/data/nnUNet/"
+
+import argparse
 from pathlib import Path
 import torch
 import numpy as np
@@ -21,6 +26,8 @@ from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
 from nnunetv2.imageio.mrc_reader_writer import MRCIO
 from skimage.morphology import ball, opening
 from skimage.measure import label
+
+
 
 # Paths to trained model files (update these if needed)
 DATASET_JSON = "/home/liushuo/Documents/data/nnUNet/nnUNet_results/Dataset010_6tomo_11classes/nnUNetTrainer__nnUNetPlans__3d_fullres/dataset.json"
