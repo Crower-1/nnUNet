@@ -4,7 +4,8 @@ from torch import nn
 from dynamic_network_architectures.architectures.unet import PlainConvUNet
 from torch.nn.modules.conv import _ConvNd
 from torch.nn.modules.dropout import _DropoutNd
-from typing import Union, Type, List, Tuple
+from typing import Union, Type, List, Tuple, Optional
+import copy
 
 
 class PlainConvUNetHead(PlainConvUNet):
@@ -27,23 +28,48 @@ class PlainConvUNetHead(PlainConvUNet):
                  dropout_op_kwargs: dict = None,
                  nonlin: Union[None, Type[torch.nn.Module]] = None,
                  nonlin_kwargs: dict = None,
-                 deep_supervision: bool = False,
-                 nonlin_first: bool = False):
+                deep_supervision: bool = False,
+                 nonlin_first: bool = False,
+                 class_names: Optional[List[str]] = None):
         super().__init__(input_channels, n_stages, features_per_stage, conv_op,
                          kernel_sizes, strides, n_conv_per_stage, num_classes,
                          n_conv_per_stage_decoder, conv_bias, norm_op,
                          norm_op_kwargs, dropout_op, dropout_op_kwargs, nonlin,
                          nonlin_kwargs, deep_supervision, nonlin_first)
 
-        # move last decoder stage to head
-        self.head = nn.ModuleDict({
-            'transpconv': self.decoder.transpconvs[-1],
-            'stage': self.decoder.stages[-1],
-            'seg_layer': self.decoder.seg_layers[-1]
-        })
+        # copy last decoder stage before removing it
+        last_transpconv = copy.deepcopy(self.decoder.transpconvs[-1])
+        last_stage = copy.deepcopy(self.decoder.stages[-1])
+        last_seg_layer = copy.deepcopy(self.decoder.seg_layers[-1])
+
         self.decoder.transpconvs = self.decoder.transpconvs[:-1]
         self.decoder.stages = self.decoder.stages[:-1]
         self.decoder.seg_layers = self.decoder.seg_layers[:-1]
+
+        # handle class names
+        if class_names is None:
+            class_names = [f'class_{i}' for i in range(num_classes)]
+        self.class_names = class_names
+
+        # build heads
+        self.heads = nn.ModuleDict()
+        for cn in self.class_names:
+            seg_layer = type(last_seg_layer)(
+                last_seg_layer.in_channels,
+                1,
+                kernel_size=last_seg_layer.kernel_size,
+                stride=last_seg_layer.stride,
+                padding=last_seg_layer.padding,
+                dilation=last_seg_layer.dilation,
+                groups=last_seg_layer.groups,
+                bias=last_seg_layer.bias is not None,
+                padding_mode=getattr(last_seg_layer, 'padding_mode', 'zeros')
+            )
+            self.heads[cn] = nn.ModuleDict({
+                'transpconv': copy.deepcopy(last_transpconv),
+                'stage': copy.deepcopy(last_stage),
+                'seg_layer': seg_layer
+            })
 
     def forward(self, x):
         skips = self.encoder(x)
@@ -57,10 +83,14 @@ class PlainConvUNetHead(PlainConvUNet):
                 seg_outputs.append(self.decoder.seg_layers[s](y))
             lres_input = y
 
-        y = self.head['transpconv'](lres_input)
-        y = torch.cat((y, skips[0]), 1)
-        y = self.head['stage'](y)
-        seg = self.head['seg_layer'](y)
+        head_predictions = []
+        for head in self.heads.values():
+            y = head['transpconv'](lres_input)
+            y = torch.cat((y, skips[0]), 1)
+            y = head['stage'](y)
+            seg_head = head['seg_layer'](y)
+            head_predictions.append(seg_head)
+        seg = torch.cat(head_predictions, 1)
         seg_outputs.append(seg)
         seg_outputs = seg_outputs[::-1]
         if not self.decoder.deep_supervision:
@@ -82,7 +112,9 @@ class PlainConvUNetHead(PlainConvUNet):
             output += np.prod([self.encoder.output_channels[-(s + 2)], *skip_sizes[-(s + 1)]], dtype=np.int64)
             if self.decoder.deep_supervision:
                 output += np.prod([self.decoder.num_classes, *skip_sizes[-(s + 1)]], dtype=np.int64)
-        output += self.head['stage'].compute_conv_feature_map_size(skip_sizes[0])
-        output += np.prod([self.encoder.output_channels[0], *skip_sizes[0]], dtype=np.int64)
-        output += np.prod([self.head['seg_layer'].out_channels, *skip_sizes[0]], dtype=np.int64)
+        for head in self.heads.values():
+            output += head['stage'].compute_conv_feature_map_size(skip_sizes[0])
+            output += np.prod([self.encoder.output_channels[0], *skip_sizes[0]], dtype=np.int64)
+            output += np.prod([head['seg_layer'].out_channels, *skip_sizes[0]], dtype=np.int64)
         return output
+
