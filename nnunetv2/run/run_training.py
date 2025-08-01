@@ -2,6 +2,7 @@ import multiprocessing
 import os
 import socket
 from typing import Union, Optional
+import inspect
 
 import nnunetv2
 import torch.cuda
@@ -316,17 +317,17 @@ def run_training_entry():
         args.tr,
         args.p,
         args.pretrained_weights,
-        args.num_gpus,
-        args.npz,
-        args.c,
-        args.val,
-        args.disable_checkpointing,
-        args.val_best,
-        device=device,
         finetune_mode=args.finetune_mode,
         encoder_weights=args.encoder_weights,
         decoder_weights=args.decoder_weights,
         head_weights=args.head_weights,
+        num_gpus=args.num_gpus,
+        export_validation_probabilities=args.npz,
+        continue_training=args.c,
+        only_run_validation=args.val,
+        disable_checkpointing=args.disable_checkpointing,
+        val_with_best=args.val_best,
+        device=device,
     )
 
 
