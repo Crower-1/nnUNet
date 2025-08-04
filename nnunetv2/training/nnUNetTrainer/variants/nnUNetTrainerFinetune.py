@@ -1,3 +1,4 @@
+import os
 import torch
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -14,7 +15,7 @@ class nnUNetTrainerFinetune(nnUNetTrainer):
                  finetune_mode: str = 'scratch',
                  encoder_weights: str | None = None,
                  decoder_weights: str | None = None,
-                 head_weights: str | None = None):
+                 head_weights: str | dict[str, str] | None = None):
         super().__init__(plans, configuration, fold, dataset_json, device)
         self.finetune_mode = finetune_mode
         self.encoder_weights = encoder_weights
@@ -28,9 +29,34 @@ class nnUNetTrainerFinetune(nnUNetTrainer):
         })
 
     def _load_module_weights(self, module: nn.Module, path: str | None):
-        if path is not None:
+        if path is not None and os.path.isfile(path):
             sd = torch.load(path, map_location=self.device)
             module.load_state_dict(sd)
+
+    def _load_head_weights(self, mod: nn.Module):
+        if self.head_weights is None:
+            return
+        if hasattr(mod, 'heads'):
+            mapping: dict[str, str] = {}
+            if isinstance(self.head_weights, str) and os.path.isdir(self.head_weights):
+                for name in mod.heads.keys():
+                    file = os.path.join(self.head_weights, f'{name}_head.pth')
+                    if os.path.isfile(file):
+                        mapping[name] = file
+            elif isinstance(self.head_weights, dict):
+                mapping = self.head_weights
+            elif isinstance(self.head_weights, str) and os.path.isfile(self.head_weights):
+                # single file for all heads not supported, ignore
+                mapping = {}
+            else:
+                mapping = {}
+            for name, file in mapping.items():
+                if name in mod.heads and os.path.isfile(file):
+                    sd = torch.load(file, map_location=self.device)
+                    mod.heads[name].load_state_dict(sd)
+        elif hasattr(mod, 'head'):
+            if isinstance(self.head_weights, str):
+                self._load_module_weights(mod.head, self.head_weights)
 
     def _freeze_module(self, module: nn.Module):
         for p in module.parameters():
@@ -50,8 +76,7 @@ class nnUNetTrainerFinetune(nnUNetTrainer):
             # load pretrained weights
             self._load_module_weights(mod.encoder, self.encoder_weights)
             self._load_module_weights(mod.decoder, self.decoder_weights)
-            if hasattr(mod, 'head'):
-                self._load_module_weights(mod.head, self.head_weights)
+            self._load_head_weights(mod)
 
             # freeze according to mode
             mode = self.finetune_mode.lower()
@@ -79,8 +104,11 @@ class nnUNetTrainerFinetune(nnUNetTrainer):
                 mod = self.network
             if isinstance(mod, OptimizedModule):
                 mod = mod._orig_mod
-            torch.save(mod.encoder.state_dict(), self.output_folder + '/encoder.pth')
-            torch.save(mod.decoder.state_dict(), self.output_folder + '/decoder.pth')
-            if hasattr(mod, 'head'):
-                torch.save(mod.head.state_dict(), self.output_folder + '/head.pth')
+            torch.save(mod.encoder.state_dict(), os.path.join(self.output_folder, 'encoder.pth'))
+            torch.save(mod.decoder.state_dict(), os.path.join(self.output_folder, 'decoder.pth'))
+            if hasattr(mod, 'heads'):
+                for name, head in mod.heads.items():
+                    torch.save(head.state_dict(), os.path.join(self.output_folder, f'{name}_head.pth'))
+            elif hasattr(mod, 'head'):
+                torch.save(mod.head.state_dict(), os.path.join(self.output_folder, 'head.pth'))
 

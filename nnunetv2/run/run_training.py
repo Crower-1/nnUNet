@@ -1,6 +1,7 @@
 import multiprocessing
 import os
 import socket
+import json
 from typing import Union, Optional
 import inspect
 
@@ -39,7 +40,7 @@ def get_trainer_from_args(dataset_name_or_id: Union[int, str],
                           finetune_mode: str = 'scratch',
                           encoder_weights: str | None = None,
                           decoder_weights: str | None = None,
-                          head_weights: str | None = None):
+                          head_weights: str | dict[str, str] | None = None):
     # load nnunet class and do sanity checks
     nnunet_trainer = recursive_find_python_class(join(nnunetv2.__path__[0], "training", "nnUNetTrainer"),
                                                 trainer_name, 'nnunetv2.training.nnUNetTrainer')
@@ -162,7 +163,7 @@ def run_training(dataset_name_or_id: Union[str, int],
                  finetune_mode: str = 'scratch',
                  encoder_weights: str | None = None,
                  decoder_weights: str | None = None,
-                 head_weights: str | None = None,
+                 head_weights: str | dict[str, str] | None = None,
                  num_gpus: int = 1,
                  export_validation_probabilities: bool = False,
                  continue_training: bool = False,
@@ -272,7 +273,7 @@ def run_training_entry():
     parser.add_argument('--decoder_weights', type=str, default=None, required=False,
                         help='[OPTIONAL] path to decoder weights for fine-tuning')
     parser.add_argument('--head_weights', type=str, default=None, required=False,
-                        help='[OPTIONAL] path to head weights for fine-tuning')
+                        help='[OPTIONAL] Folder with head weights or JSON mapping of class names to files')
     parser.add_argument('-num_gpus', type=int, default=1, required=False,
                         help='Specify the number of GPUs to use for training')
     parser.add_argument('--npz', action='store_true', required=False,
@@ -310,6 +311,22 @@ def run_training_entry():
     else:
         device = torch.device('mps')
 
+    head_weights = args.head_weights
+    if head_weights is not None:
+        if os.path.isdir(head_weights):
+            pass
+        elif os.path.isfile(head_weights):
+            try:
+                with open(head_weights) as f:
+                    head_weights = json.load(f)
+            except Exception:
+                pass
+        else:
+            try:
+                head_weights = json.loads(head_weights)
+            except Exception:
+                pass
+
     run_training(
         args.dataset_name_or_id,
         args.configuration,
@@ -320,7 +337,7 @@ def run_training_entry():
         finetune_mode=args.finetune_mode,
         encoder_weights=args.encoder_weights,
         decoder_weights=args.decoder_weights,
-        head_weights=args.head_weights,
+        head_weights=head_weights,
         num_gpus=args.num_gpus,
         export_validation_probabilities=args.npz,
         continue_training=args.c,

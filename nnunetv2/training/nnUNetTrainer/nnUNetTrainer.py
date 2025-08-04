@@ -115,7 +115,7 @@ class nnUNetTrainer(object):
 
         ###  Saving all the init args into class variables for later access
         self.plans_manager = PlansManager(plans)
-        self.configuration_manager = self.plans_manager.get_configuration(configuration)
+        self.configuration_manager = self.plans_manager.get_configuration(configuration, dataset_json)
         self.configuration_name = configuration
         self.dataset_json = dataset_json
         self.fold = fold
@@ -1170,6 +1170,13 @@ class nnUNetTrainer(object):
                     'inference_allowed_mirroring_axes': self.inference_allowed_mirroring_axes,
                 }
                 torch.save(checkpoint, filename)
+
+                # save separate heads if present
+                if hasattr(mod, 'heads'):
+                    for name, head in mod.heads.items():
+                        torch.save(head.state_dict(), os.path.join(self.output_folder, f'{name}_head.pth'))
+                elif hasattr(mod, 'head'):
+                    torch.save(mod.head.state_dict(), os.path.join(self.output_folder, 'head.pth'))
             else:
                 self.print_to_log_file('No checkpoint written, checkpointing is disabled')
 
@@ -1302,7 +1309,7 @@ class nnUNetTrainer(object):
                 # if needed, export the softmax prediction for the next stage
                 if next_stages is not None:
                     for n in next_stages:
-                        next_stage_config_manager = self.plans_manager.get_configuration(n)
+                        next_stage_config_manager = self.plans_manager.get_configuration(n, self.dataset_json)
                         expected_preprocessed_folder = join(nnUNet_preprocessed, self.plans_manager.dataset_name,
                                                             next_stage_config_manager.data_identifier)
                         # next stage may have a different dataset class, do not use self.dataset_class
