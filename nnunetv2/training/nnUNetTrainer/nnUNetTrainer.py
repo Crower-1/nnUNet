@@ -1170,6 +1170,13 @@ class nnUNetTrainer(object):
                     'inference_allowed_mirroring_axes': self.inference_allowed_mirroring_axes,
                 }
                 torch.save(checkpoint, filename)
+
+                # save separate heads if present
+                if hasattr(mod, 'heads'):
+                    for name, head in mod.heads.items():
+                        torch.save(head.state_dict(), os.path.join(self.output_folder, f'{name}_head.pth'))
+                elif hasattr(mod, 'head'):
+                    torch.save(mod.head.state_dict(), os.path.join(self.output_folder, 'head.pth'))
             else:
                 self.print_to_log_file('No checkpoint written, checkpointing is disabled')
 
