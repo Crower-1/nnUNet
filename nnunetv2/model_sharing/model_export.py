@@ -44,6 +44,10 @@ def export_pretrained_model(dataset_name_or_id: Union[int, str], output_file: st
                     source_file = join(trainer_output_dir, fold_folder, mod_file)
                     if isfile(source_file):
                         zipf.write(source_file, os.path.relpath(source_file, nnUNet_results))
+                # include all *_head.pth files for multi-head networks
+                head_files = subfiles(join(trainer_output_dir, fold_folder), join=True, suffix="_head.pth")
+                for hf in head_files:
+                    zipf.write(hf, os.path.relpath(hf, nnUNet_results))
 
                 # progress.png
                 source_file = join(trainer_output_dir, fold_folder, "progress.png")

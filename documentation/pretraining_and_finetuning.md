@@ -89,5 +89,6 @@ Pretrained weights for the encoder, decoder and head can be provided individuall
 `--encoder_weights`, `--decoder_weights` and `--head_weights` command line arguments of `nnUNetv2_train`.
 The chosen mode is passed via `--finetune_mode`.
 
-During training additional files `encoder.pth`, `decoder.pth` and `head.pth` are written next to the regular
-checkpoints. These can be reused to build a library of pretrained components.
+During training additional files `encoder.pth`, `decoder.pth` and head checkpoints are written next to the
+regular checkpoints. For single-head networks this file is `head.pth`. If multiple heads are present, each is
+stored as `<class_name>_head.pth`. These can be reused to build a library of pretrained components.
