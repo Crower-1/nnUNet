@@ -297,6 +297,9 @@ class ExperimentPlanner(object):
             '_kw_requires_import': ('conv_op', 'norm_op', 'dropout_op', 'nonlin'),
         }
 
+        class_names = [k for k in self.dataset_json['labels'].keys() if k != 'ignore']
+        architecture_kwargs['arch_kwargs']['class_names'] = class_names
+
         # now estimate vram consumption
         if _keygen(patch_size, pool_op_kernel_sizes) in _cache.keys():
             estimate = _cache[_keygen(patch_size, pool_op_kernel_sizes)]
