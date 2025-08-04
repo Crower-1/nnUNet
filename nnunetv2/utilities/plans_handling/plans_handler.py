@@ -255,12 +255,24 @@ class PlansManager(object):
         return configuration
 
     @lru_cache(maxsize=10)
-    def get_configuration(self, configuration_name: str):
+    def _get_configuration_cached(self, configuration_name: str) -> dict:
         if configuration_name not in self.plans['configurations'].keys():
-            raise RuntimeError(f"Requested configuration {configuration_name} not found in plans. "
-                               f"Available configurations: {list(self.plans['configurations'].keys())}")
+            raise RuntimeError(
+                f"Requested configuration {configuration_name} not found in plans. "
+                f"Available configurations: {list(self.plans['configurations'].keys())}"
+            )
+        return self._internal_resolve_configuration_inheritance(configuration_name)
 
-        configuration_dict = self._internal_resolve_configuration_inheritance(configuration_name)
+    def get_configuration(self, configuration_name: str, dataset_json: dict = None):
+        configuration_dict = deepcopy(self._get_configuration_cached(configuration_name))
+        arch_kwargs = configuration_dict['architecture']['arch_kwargs']
+        if dataset_json is not None and 'class_names' not in arch_kwargs:
+            # Fallback for old plans: derive class names from dataset_json labels
+            arch_kwargs['class_names'] = [
+                k for k in dataset_json['labels'].keys() if k != 'ignore'
+            ]
+        # If dataset_json is None we leave arch_kwargs untouched; the network will
+        # generate generic "class_X" names, preserving backward compatibility.
         return ConfigurationManager(configuration_dict)
 
     @property

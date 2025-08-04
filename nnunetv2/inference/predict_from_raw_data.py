@@ -107,7 +107,7 @@ class nnUNetPredictor(object):
             parameters.append(ckpt["network_weights"])
 
         # 3. 根据 configuration 构建网络
-        config_mgr = plans_manager.get_configuration(configuration_name)
+        config_mgr = plans_manager.get_configuration(configuration_name, dataset_json)
         num_inputs = determine_num_input_channels(plans_manager, config_mgr, dataset_json)
         num_heads  = plans_manager.get_label_manager(dataset_json).num_segmentation_heads
 
@@ -175,7 +175,7 @@ class nnUNetPredictor(object):
 
             parameters.append(checkpoint['network_weights'])
 
-        configuration_manager = plans_manager.get_configuration(configuration_name)
+            configuration_manager = plans_manager.get_configuration(configuration_name, dataset_json)
         # restore network
         num_input_channels = determine_num_input_channels(plans_manager, configuration_manager, dataset_json)
         trainer_class = recursive_find_python_class(join(nnunetv2.__path__[0], "training", "nnUNetTrainer"),

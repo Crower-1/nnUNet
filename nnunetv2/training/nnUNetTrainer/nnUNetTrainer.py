@@ -115,7 +115,7 @@ class nnUNetTrainer(object):
 
         ###  Saving all the init args into class variables for later access
         self.plans_manager = PlansManager(plans)
-        self.configuration_manager = self.plans_manager.get_configuration(configuration)
+        self.configuration_manager = self.plans_manager.get_configuration(configuration, dataset_json)
         self.configuration_name = configuration
         self.dataset_json = dataset_json
         self.fold = fold
@@ -1309,7 +1309,7 @@ class nnUNetTrainer(object):
                 # if needed, export the softmax prediction for the next stage
                 if next_stages is not None:
                     for n in next_stages:
-                        next_stage_config_manager = self.plans_manager.get_configuration(n)
+                        next_stage_config_manager = self.plans_manager.get_configuration(n, self.dataset_json)
                         expected_preprocessed_folder = join(nnUNet_preprocessed, self.plans_manager.dataset_name,
                                                             next_stage_config_manager.data_identifier)
                         # next stage may have a different dataset class, do not use self.dataset_class
