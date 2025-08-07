@@ -18,6 +18,7 @@ from nnunetv2.utilities.dataset_name_id_conversion import maybe_convert_to_datas
 from nnunetv2.utilities.default_n_proc_DA import get_allowed_n_proc_DA
 from nnunetv2.utilities.get_network_from_plans import get_network_from_plans
 from nnunetv2.utilities.json_export import recursive_fix_for_json_export
+from nnunetv2.utilities.label_handling.label_handling import LabelManager
 from nnunetv2.utilities.utils import get_filenames_of_train_images_and_targets
 
 
@@ -297,8 +298,16 @@ class ExperimentPlanner(object):
             '_kw_requires_import': ('conv_op', 'norm_op', 'dropout_op', 'nonlin'),
         }
 
-        class_names = [k for k in self.dataset_json['labels'].keys() if k != 'ignore']
+        label_manager = LabelManager(self.dataset_json['labels'],
+                                     self.dataset_json.get('regions_class_order'))
+        if label_manager.has_regions:
+            class_names = [k for k in self.dataset_json['labels'].keys()
+                           if k not in ('background', 'ignore')]
+        else:
+            class_names = [k for k in self.dataset_json['labels'].keys() if k != 'ignore']
         architecture_kwargs['arch_kwargs']['class_names'] = class_names
+        if len(class_names) != label_manager.num_segmentation_heads:
+            raise RuntimeError('Number of class names does not match number of segmentation heads')
 
         # now estimate vram consumption
         if _keygen(patch_size, pool_op_kernel_sizes) in _cache.keys():
@@ -306,7 +315,7 @@ class ExperimentPlanner(object):
         else:
             estimate = self.static_estimate_VRAM_usage(patch_size,
                                                        num_input_channels,
-                                                       len(self.dataset_json['labels'].keys()),
+                                                       label_manager.num_segmentation_heads,
                                                        architecture_kwargs['network_class_name'],
                                                        architecture_kwargs['arch_kwargs'],
                                                        architecture_kwargs['_kw_requires_import'],
@@ -363,7 +372,7 @@ class ExperimentPlanner(object):
                 estimate = self.static_estimate_VRAM_usage(
                     patch_size,
                     num_input_channels,
-                    len(self.dataset_json['labels'].keys()),
+                    label_manager.num_segmentation_heads,
                     architecture_kwargs['network_class_name'],
                     architecture_kwargs['arch_kwargs'],
                     architecture_kwargs['_kw_requires_import'],
