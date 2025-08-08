@@ -12,6 +12,7 @@ from torch import nn
 from nnunetv2.experiment_planning.experiment_planners.default_experiment_planner import ExperimentPlanner
 
 from nnunetv2.experiment_planning.experiment_planners.network_topology import get_pool_and_conv_props
+from nnunetv2.utilities.label_handling.label_handling import LabelManager
 
 
 class ResEncUNetPlanner(ExperimentPlanner):
@@ -114,13 +115,25 @@ class ResEncUNetPlanner(ExperimentPlanner):
             '_kw_requires_import': ('conv_op', 'norm_op', 'dropout_op', 'nonlin'),
         }
 
+        label_manager = LabelManager(self.dataset_json['labels'],
+                                     self.dataset_json.get('regions_class_order'))
+        if label_manager.has_regions:
+            class_names = [k for k in self.dataset_json['labels'].keys()
+                           if k not in ('background', 'ignore')]
+        else:
+            class_names = [k for k in self.dataset_json['labels'].keys() if k != 'ignore']
+        if len(class_names) != label_manager.num_segmentation_heads:
+            raise RuntimeError('Number of class names does not match number of segmentation heads')
+
+        num_segmentation_heads = label_manager.num_segmentation_heads
+
         # now estimate vram consumption
         if _keygen(patch_size, pool_op_kernel_sizes) in _cache.keys():
             estimate = _cache[_keygen(patch_size, pool_op_kernel_sizes)]
         else:
             estimate = self.static_estimate_VRAM_usage(patch_size,
                                                        num_input_channels,
-                                                       len(self.dataset_json['labels'].keys()),
+                                                       num_segmentation_heads,
                                                        architecture_kwargs['network_class_name'],
                                                        architecture_kwargs['arch_kwargs'],
                                                        architecture_kwargs['_kw_requires_import'],
@@ -174,7 +187,7 @@ class ResEncUNetPlanner(ExperimentPlanner):
                 estimate = self.static_estimate_VRAM_usage(
                     patch_size,
                     num_input_channels,
-                    len(self.dataset_json['labels'].keys()),
+                    num_segmentation_heads,
                     architecture_kwargs['network_class_name'],
                     architecture_kwargs['arch_kwargs'],
                     architecture_kwargs['_kw_requires_import'],
@@ -213,8 +226,77 @@ class ResEncUNetPlanner(ExperimentPlanner):
             'resampling_fn_seg_kwargs': resampling_seg_kwargs,
             'resampling_fn_probabilities': resampling_softmax.__name__,
             'resampling_fn_probabilities_kwargs': resampling_softmax_kwargs,
-            'architecture': architecture_kwargs
+            'architecture': architecture_kwargs,
+            'class_names': class_names
         }
+        return plan
+
+
+class nnUNetPlannerResEncHead(ResEncUNetPlanner):
+    """Planner for ResidualEncoderHeadUNet.
+
+    Generates plans with a fixed ResidualEncoderUNet backbone where the last
+    decoder stage is split into class-specific heads. The produced plans
+    automatically point to :class:`ResidualEncoderHeadUNet` and include
+    ``class_names`` so that the architecture can be instantiated without
+    additional manual edits.
+    """
+
+    def __init__(self,
+                 dataset_name_or_id: Union[str, int],
+                 gpu_memory_target_in_gb: float = 8,
+                 preprocessor_name: str = 'DefaultPreprocessor',
+                 plans_name: str = 'nnUNetResEncHeadUNetPlans',
+                 overwrite_target_spacing: Union[List[float], Tuple[float, ...]] = None,
+                 suppress_transpose: bool = False):
+        super().__init__(dataset_name_or_id, gpu_memory_target_in_gb,
+                         preprocessor_name, plans_name,
+                         overwrite_target_spacing, suppress_transpose)
+
+    def get_plans_for_configuration(self,
+                                    spacing: Union[np.ndarray, Tuple[float, ...], List[float]],
+                                    median_shape: Union[np.ndarray, Tuple[int, ...]],
+                                    data_identifier: str,
+                                    approximate_n_voxels_dataset: float,
+                                    _cache: dict) -> dict:
+        plan = super().get_plans_for_configuration(spacing, median_shape,
+                                                   data_identifier,
+                                                   approximate_n_voxels_dataset,
+                                                   _cache)
+        class_names = plan.pop('class_names')
+
+        # enforce patch size divisibility so that all decoder skip connections align
+        fixed_strides = np.array([[1, 1, 1],
+                                  [2, 2, 2],
+                                  [2, 2, 2],
+                                  [2, 2, 2],
+                                  [2, 2, 2],
+                                  [2, 2, 2]])
+        total_stride = np.prod(fixed_strides[1:], axis=0)
+        plan['patch_size'] = [int(np.ceil(p / s) * s) for p, s in zip(plan['patch_size'], total_stride)]
+
+        plan['architecture'] = {
+            'network_class_name': 'nnunetv2.network_architecture.residual_encoder_head_unet.ResidualEncoderHeadUNet',
+            'arch_kwargs': {
+                'n_stages': 6,
+                'features_per_stage': [32, 64, 128, 256, 320, 320],
+                'conv_op': 'torch.nn.modules.conv.Conv3d',
+                'kernel_sizes': [[3, 3, 3], [3, 3, 3], [3, 3, 3], [3, 3, 3], [3, 3, 3], [3, 3, 3]],
+                'strides': fixed_strides.tolist(),
+                'n_blocks_per_stage': [1, 3, 4, 6, 6, 6],
+                'n_conv_per_stage_decoder': [1, 1, 1, 1, 1],
+                'conv_bias': True,
+                'norm_op': 'torch.nn.modules.instancenorm.InstanceNorm3d',
+                'norm_op_kwargs': {'eps': 1e-05, 'affine': True},
+                'dropout_op': None,
+                'dropout_op_kwargs': None,
+                'nonlin': 'torch.nn.LeakyReLU',
+                'nonlin_kwargs': {'inplace': True},
+                'class_names': class_names,
+            },
+            '_kw_requires_import': ['conv_op', 'norm_op', 'dropout_op', 'nonlin'],
+        }
+
         return plan
 
 

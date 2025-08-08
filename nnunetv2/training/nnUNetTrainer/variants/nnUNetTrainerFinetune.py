@@ -31,7 +31,25 @@ class nnUNetTrainerFinetune(nnUNetTrainer):
     def _load_module_weights(self, module: nn.Module, path: str | None):
         if path is not None and os.path.isfile(path):
             sd = torch.load(path, map_location=self.device)
-            module.load_state_dict(sd)
+            current = module.state_dict()
+            loadable: dict[str, torch.Tensor] = {}
+            missing: list[str] = []
+            mismatched: list[str] = []
+            for k, v in sd.items():
+                if k not in current:
+                    missing.append(k)
+                elif current[k].shape != v.shape:
+                    mismatched.append(k)
+                else:
+                    loadable[k] = v
+            if missing or mismatched:
+                print(f"Failed to load weights from {path} for {module.__class__.__name__}.")
+                if missing:
+                    print(f"  Missing keys: {missing}")
+                if mismatched:
+                    print(f"  Shape mismatch: {mismatched}")
+            current.update(loadable)
+            module.load_state_dict(current)
 
     def _load_head_weights(self, mod: nn.Module):
         if self.head_weights is None:
@@ -52,8 +70,9 @@ class nnUNetTrainerFinetune(nnUNetTrainer):
                 mapping = {}
             for name, file in mapping.items():
                 if name in mod.heads and os.path.isfile(file):
-                    sd = torch.load(file, map_location=self.device)
-                    mod.heads[name].load_state_dict(sd)
+                    self._load_module_weights(mod.heads[name], file)
+                else:
+                    print(f"Failed to load head weights for '{name}' from {file}")
         elif hasattr(mod, 'head'):
             if isinstance(self.head_weights, str):
                 self._load_module_weights(mod.head, self.head_weights)
