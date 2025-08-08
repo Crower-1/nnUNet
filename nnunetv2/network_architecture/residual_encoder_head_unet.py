@@ -2,10 +2,33 @@ import numpy as np
 import torch
 from torch import nn
 from dynamic_network_architectures.architectures.unet import ResidualEncoderUNet
+from dynamic_network_architectures.building_blocks.residual import BasicBlockD
 from torch.nn.modules.conv import _ConvNd
 from torch.nn.modules.dropout import _DropoutNd
 from typing import Union, Type, List, Tuple, Optional
 import copy
+
+
+class BasicBlockDWithCeil(BasicBlockD):
+    """Variant of :class:`BasicBlockD` using ceil_mode pooling in the skip path.
+
+    ``BasicBlockD`` downsamples the residual branch with ``AvgPool`` when a stage
+    applies strided convolutions. The default pooling uses ``ceil_mode=False``
+    which yields ``floor(input/stride)`` for odd spatial dimensions. The main
+    convolutional path, however, keeps ``ceil_mode=True`` semantics because of
+    padding which results in ``ceil(input/stride)``. For odd-sized feature maps
+    this leads to a size mismatch when adding residual and main path outputs.
+
+    This subclass switches the pooling to ``ceil_mode=True`` so both paths
+    produce matching shapes irrespective of the input size.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if isinstance(self.skip, nn.Sequential) and len(self.skip) > 0:
+            pool = self.skip[0]
+            if hasattr(pool, "ceil_mode"):
+                pool.ceil_mode = True
 
 
 class ResidualEncoderHeadUNet(ResidualEncoderUNet):
@@ -49,6 +72,7 @@ class ResidualEncoderHeadUNet(ResidualEncoderUNet):
             nonlin=nonlin,
             nonlin_kwargs=nonlin_kwargs,
             deep_supervision=deep_supervision,
+            block=BasicBlockDWithCeil,
         )
 
         # copy last decoder stage before removing it
