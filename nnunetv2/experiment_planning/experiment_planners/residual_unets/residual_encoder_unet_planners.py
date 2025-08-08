@@ -12,6 +12,7 @@ from torch import nn
 from nnunetv2.experiment_planning.experiment_planners.default_experiment_planner import ExperimentPlanner
 
 from nnunetv2.experiment_planning.experiment_planners.network_topology import get_pool_and_conv_props
+from nnunetv2.utilities.label_handling.label_handling import LabelManager
 
 
 class ResEncUNetPlanner(ExperimentPlanner):
@@ -114,13 +115,26 @@ class ResEncUNetPlanner(ExperimentPlanner):
             '_kw_requires_import': ('conv_op', 'norm_op', 'dropout_op', 'nonlin'),
         }
 
+        label_manager = LabelManager(self.dataset_json['labels'],
+                                     self.dataset_json.get('regions_class_order'))
+        if label_manager.has_regions:
+            class_names = [k for k in self.dataset_json['labels'].keys()
+                           if k not in ('background', 'ignore')]
+        else:
+            class_names = [k for k in self.dataset_json['labels'].keys() if k != 'ignore']
+        architecture_kwargs['arch_kwargs']['class_names'] = class_names
+        if len(class_names) != label_manager.num_segmentation_heads:
+            raise RuntimeError('Number of class names does not match number of segmentation heads')
+
+        num_segmentation_heads = label_manager.num_segmentation_heads
+
         # now estimate vram consumption
         if _keygen(patch_size, pool_op_kernel_sizes) in _cache.keys():
             estimate = _cache[_keygen(patch_size, pool_op_kernel_sizes)]
         else:
             estimate = self.static_estimate_VRAM_usage(patch_size,
                                                        num_input_channels,
-                                                       len(self.dataset_json['labels'].keys()),
+                                                       num_segmentation_heads,
                                                        architecture_kwargs['network_class_name'],
                                                        architecture_kwargs['arch_kwargs'],
                                                        architecture_kwargs['_kw_requires_import'],
@@ -174,7 +188,7 @@ class ResEncUNetPlanner(ExperimentPlanner):
                 estimate = self.static_estimate_VRAM_usage(
                     patch_size,
                     num_input_channels,
-                    len(self.dataset_json['labels'].keys()),
+                    num_segmentation_heads,
                     architecture_kwargs['network_class_name'],
                     architecture_kwargs['arch_kwargs'],
                     architecture_kwargs['_kw_requires_import'],
@@ -249,9 +263,7 @@ class nnUNetPlannerResEncHead(ResEncUNetPlanner):
                                                    data_identifier,
                                                    approximate_n_voxels_dataset,
                                                    _cache)
-
-        class_names = [v for k, v in sorted(self.dataset_json['labels'].items(),
-                                            key=lambda kv: int(kv[0]))]
+        class_names = plan['architecture']['arch_kwargs']['class_names']
 
         plan['architecture'] = {
             'network_class_name': 'nnunetv2.network_architecture.residual_encoder_head_unet.ResidualEncoderHeadUNet',
