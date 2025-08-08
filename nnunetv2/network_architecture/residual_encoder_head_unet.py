@@ -31,11 +31,26 @@ class ResidualEncoderHeadUNet(ResidualEncoderUNet):
                  deep_supervision: bool = False,
                  nonlin_first: bool = False,
                  class_names: Optional[List[str]] = None):
-        super().__init__(input_channels, n_stages, features_per_stage, conv_op,
-                         kernel_sizes, strides, n_blocks_per_stage, num_classes,
-                         n_blocks_per_stage_decoder, conv_bias, norm_op,
-                         norm_op_kwargs, dropout_op, dropout_op_kwargs, nonlin,
-                         nonlin_kwargs, deep_supervision, nonlin_first)
+        super().__init__(
+            input_channels=input_channels,
+            n_stages=n_stages,
+            features_per_stage=features_per_stage,
+            conv_op=conv_op,
+            kernel_sizes=kernel_sizes,
+            strides=strides,
+            n_blocks_per_stage=n_blocks_per_stage,
+            num_classes=num_classes,
+            n_blocks_per_stage_decoder=n_blocks_per_stage_decoder,
+            conv_bias=conv_bias,
+            norm_op=norm_op,
+            norm_op_kwargs=norm_op_kwargs,
+            dropout_op=dropout_op,
+            dropout_op_kwargs=dropout_op_kwargs,
+            nonlin=nonlin,
+            nonlin_kwargs=nonlin_kwargs,
+            deep_supervision=deep_supervision,
+            nonlin_first=nonlin_first,
+        )
 
         # copy last decoder stage before removing it
         last_transpconv = copy.deepcopy(self.decoder.transpconvs[-1])
