@@ -20,7 +20,7 @@ class ResidualEncoderHeadUNet(ResidualEncoderUNet):
                  strides: Union[int, List[int], Tuple[int, ...]],
                  n_blocks_per_stage: Union[int, List[int], Tuple[int, ...]],
                  num_classes: int,
-                 n_blocks_per_stage_decoder: Union[int, Tuple[int, ...], List[int]],
+                 n_conv_per_stage_decoder: Union[int, Tuple[int, ...], List[int]],
                  conv_bias: bool = False,
                  norm_op: Union[None, Type[nn.Module]] = None,
                  norm_op_kwargs: dict = None,
@@ -40,7 +40,7 @@ class ResidualEncoderHeadUNet(ResidualEncoderUNet):
             strides=strides,
             n_blocks_per_stage=n_blocks_per_stage,
             num_classes=num_classes,
-            n_blocks_per_stage_decoder=n_blocks_per_stage_decoder,
+            n_conv_per_stage_decoder=n_conv_per_stage_decoder,
             conv_bias=conv_bias,
             norm_op=norm_op,
             norm_op_kwargs=norm_op_kwargs,
@@ -49,7 +49,6 @@ class ResidualEncoderHeadUNet(ResidualEncoderUNet):
             nonlin=nonlin,
             nonlin_kwargs=nonlin_kwargs,
             deep_supervision=deep_supervision,
-            nonlin_first=nonlin_first,
         )
 
         # copy last decoder stage before removing it
