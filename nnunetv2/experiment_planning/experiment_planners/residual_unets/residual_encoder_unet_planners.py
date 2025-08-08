@@ -265,6 +265,16 @@ class nnUNetPlannerResEncHead(ResEncUNetPlanner):
                                                    _cache)
         class_names = plan.pop('class_names')
 
+        # enforce patch size divisibility so that all decoder skip connections align
+        fixed_strides = np.array([[1, 1, 1],
+                                  [2, 2, 2],
+                                  [2, 2, 2],
+                                  [2, 2, 2],
+                                  [2, 2, 2],
+                                  [2, 2, 2]])
+        total_stride = np.prod(fixed_strides[1:], axis=0)
+        plan['patch_size'] = [int(np.ceil(p / s) * s) for p, s in zip(plan['patch_size'], total_stride)]
+
         plan['architecture'] = {
             'network_class_name': 'nnunetv2.network_architecture.residual_encoder_head_unet.ResidualEncoderHeadUNet',
             'arch_kwargs': {
@@ -272,7 +282,7 @@ class nnUNetPlannerResEncHead(ResEncUNetPlanner):
                 'features_per_stage': [32, 64, 128, 256, 320, 320],
                 'conv_op': 'torch.nn.modules.conv.Conv3d',
                 'kernel_sizes': [[3, 3, 3], [3, 3, 3], [3, 3, 3], [3, 3, 3], [3, 3, 3], [3, 3, 3]],
-                'strides': [[1, 1, 1], [2, 2, 2], [2, 2, 2], [2, 2, 2], [2, 2, 2], [2, 2, 2]],
+                'strides': fixed_strides.tolist(),
                 'n_blocks_per_stage': [1, 3, 4, 6, 6, 6],
                 'n_conv_per_stage_decoder': [1, 1, 1, 1, 1],
                 'conv_bias': True,
