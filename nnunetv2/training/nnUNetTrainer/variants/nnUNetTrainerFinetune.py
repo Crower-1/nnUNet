@@ -31,7 +31,11 @@ class nnUNetTrainerFinetune(nnUNetTrainer):
     def _load_module_weights(self, module: nn.Module, path: str | None):
         if path is not None and os.path.isfile(path):
             sd = torch.load(path, map_location=self.device)
-            module.load_state_dict(sd)
+            current = module.state_dict()
+            # filter to overlapping keys so we can ignore layers that no longer exist
+            sd = {k: v for k, v in sd.items() if k in current and v.shape == current[k].shape}
+            current.update(sd)
+            module.load_state_dict(current)
 
     def _load_head_weights(self, mod: nn.Module):
         if self.head_weights is None:
