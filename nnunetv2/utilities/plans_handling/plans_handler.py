@@ -8,6 +8,8 @@ from typing import Union, Tuple, List, Type, Callable
 
 import numpy as np
 import torch
+import inspect
+import pydoc
 
 from nnunetv2.preprocessing.resampling.utils import recursive_find_resampling_fn_by_name
 import nnunetv2
@@ -267,10 +269,11 @@ class PlansManager(object):
         configuration_dict = deepcopy(self._get_configuration_cached(configuration_name))
         arch_kwargs = configuration_dict['architecture']['arch_kwargs']
         if dataset_json is not None and 'class_names' not in arch_kwargs:
-            # Fallback for old plans: derive class names from dataset_json labels
-            arch_kwargs['class_names'] = [
-                k for k in dataset_json['labels'].keys() if k != 'ignore'
-            ]
+            network_class = pydoc.locate(configuration_dict['architecture']['network_class_name'])
+            if network_class is not None and 'class_names' in inspect.signature(network_class.__init__).parameters:
+                arch_kwargs['class_names'] = [
+                    k for k in dataset_json['labels'].keys() if k != 'ignore'
+                ]
         # If dataset_json is None we leave arch_kwargs untouched; the network will
         # generate generic "class_X" names, preserving backward compatibility.
         return ConfigurationManager(configuration_dict)

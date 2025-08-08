@@ -122,7 +122,6 @@ class ResEncUNetPlanner(ExperimentPlanner):
                            if k not in ('background', 'ignore')]
         else:
             class_names = [k for k in self.dataset_json['labels'].keys() if k != 'ignore']
-        architecture_kwargs['arch_kwargs']['class_names'] = class_names
         if len(class_names) != label_manager.num_segmentation_heads:
             raise RuntimeError('Number of class names does not match number of segmentation heads')
 
@@ -227,7 +226,8 @@ class ResEncUNetPlanner(ExperimentPlanner):
             'resampling_fn_seg_kwargs': resampling_seg_kwargs,
             'resampling_fn_probabilities': resampling_softmax.__name__,
             'resampling_fn_probabilities_kwargs': resampling_softmax_kwargs,
-            'architecture': architecture_kwargs
+            'architecture': architecture_kwargs,
+            'class_names': class_names
         }
         return plan
 
@@ -263,7 +263,7 @@ class nnUNetPlannerResEncHead(ResEncUNetPlanner):
                                                    data_identifier,
                                                    approximate_n_voxels_dataset,
                                                    _cache)
-        class_names = plan['architecture']['arch_kwargs']['class_names']
+        class_names = plan.pop('class_names')
 
         plan['architecture'] = {
             'network_class_name': 'nnunetv2.network_architecture.residual_encoder_head_unet.ResidualEncoderHeadUNet',
