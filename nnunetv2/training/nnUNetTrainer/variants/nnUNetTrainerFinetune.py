@@ -104,11 +104,21 @@ class nnUNetTrainerFinetune(nnUNetTrainer):
                 mod = self.network
             if isinstance(mod, OptimizedModule):
                 mod = mod._orig_mod
-            torch.save(mod.encoder.state_dict(), os.path.join(self.output_folder, 'encoder.pth'))
-            torch.save(mod.decoder.state_dict(), os.path.join(self.output_folder, 'decoder.pth'))
+
+            # determine target directory based on checkpoint type
+            subdir = (
+                'best_component_pth'
+                if filename.endswith('checkpoint_best.pth')
+                else 'last_component_pth'
+            )
+            target_dir = os.path.join(self.output_folder, subdir)
+            os.makedirs(target_dir, exist_ok=True)
+
+            torch.save(mod.encoder.state_dict(), os.path.join(target_dir, 'encoder.pth'))
+            torch.save(mod.decoder.state_dict(), os.path.join(target_dir, 'decoder.pth'))
             if hasattr(mod, 'heads'):
                 for name, head in mod.heads.items():
-                    torch.save(head.state_dict(), os.path.join(self.output_folder, f'{name}_head.pth'))
+                    torch.save(head.state_dict(), os.path.join(target_dir, f'{name}_head.pth'))
             elif hasattr(mod, 'head'):
-                torch.save(mod.head.state_dict(), os.path.join(self.output_folder, 'head.pth'))
+                torch.save(mod.head.state_dict(), os.path.join(target_dir, 'head.pth'))
 
