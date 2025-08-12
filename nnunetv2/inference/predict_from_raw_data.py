@@ -6,7 +6,7 @@ from copy import deepcopy
 from queue import Queue
 from threading import Thread
 from time import sleep
-from typing import Tuple, Union, List, Optional
+from typing import Tuple, Union, List, Optional, Dict
 
 import numpy as np
 import torch
@@ -212,6 +212,163 @@ class nnUNetPredictor(object):
                 and not isinstance(self.network, OptimizedModule):
             print('Using torch.compile')
             self.network = torch.compile(self.network)
+
+    def initialize_plainconv_unet_head(
+        self,
+        encoder_path: str,
+        decoder_path: str,
+        head_paths: List[str],
+        patch_size: Tuple[int, int, int] = (128, 128, 128),
+    ):
+        """Initialize network from separate encoder/decoder/head weight files.
+
+        This helper builds a :class:`PlainConvUNetHead` with a fixed 3D full
+        resolution configuration. ``class_names`` are inferred from the
+        filenames of ``*_head.pth`` files. ``patch_size`` defaults to
+        ``(128, 128, 128)`` but can be overridden.
+
+        Args:
+            encoder_path: Path to ``encoder.pth``.
+            decoder_path: Path to ``decoder.pth``.
+            head_paths:  List of ``<class_name>_head.pth`` files.
+            patch_size:  Spatial patch size used by the configuration.
+        """
+
+        # recover class names from head file names and load their weights
+        class_names: List[str] = []
+        head_state_dicts: Dict[str, dict] = {}
+        for hp in head_paths:
+            cname = os.path.basename(hp).replace("_head.pth", "")
+            class_names.append(cname)
+            head_state_dicts[cname] = torch.load(hp, map_location="cpu")
+
+        class_names = sorted(class_names)
+
+        # build dataset json describing channels and labels
+        labels = {cn: i + 1 for i, cn in enumerate(class_names)}
+        dataset_json = {
+            "channel_names": {"0": "cryoET"},
+            "labels": {"background": 0, **labels},
+            "regions_class_order": list(range(1, len(class_names) + 1)),
+            "file_ending": ".mrc",
+        }
+
+        # assemble plans with fixed architecture, inserting class names and patch size
+        arch_kwargs = {
+            "n_stages": 6,
+            "features_per_stage": [32, 64, 128, 256, 320, 320],
+            "conv_op": "torch.nn.modules.conv.Conv3d",
+            "kernel_sizes": [[3, 3, 3]] * 6,
+            "strides": [[1, 1, 1], [2, 2, 2], [2, 2, 2], [2, 2, 2], [2, 2, 2], [2, 2, 2]],
+            "n_conv_per_stage": [2, 2, 2, 2, 2, 2],
+            "n_conv_per_stage_decoder": [2, 2, 2, 2, 2],
+            "conv_bias": True,
+            "norm_op": "torch.nn.modules.instancenorm.InstanceNorm3d",
+            "norm_op_kwargs": {"eps": 1e-05, "affine": True},
+            "dropout_op": None,
+            "dropout_op_kwargs": None,
+            "nonlin": "torch.nn.LeakyReLU",
+            "nonlin_kwargs": {"inplace": True},
+            "class_names": class_names,
+        }
+        plans = {
+            "dataset_name": "PlainConvUNetHead",
+            "plans_name": "nnUNetPlans",
+            "original_median_spacing_after_transp": [17.14285659790039] * 3,
+            "original_median_shape_after_transp": [214, 928, 960],
+            "image_reader_writer": "MRCIO",
+            "transpose_forward": [0, 1, 2],
+            "transpose_backward": [0, 1, 2],
+            "configurations": {
+                "3d_fullres": {
+                    "data_identifier": "nnUNetPlans_3d_fullres",
+                    "preprocessor_name": "DefaultPreprocessor",
+                    "batch_size": 2,
+                    "patch_size": list(patch_size),
+                    "median_image_size_in_voxels": [214.0, 928.0, 960.0],
+                    "spacing": [17.14285659790039] * 3,
+                    "normalization_schemes": ["ZScoreNormalization"],
+                    "use_mask_for_norm": [False],
+                    "resampling_fn_data": "resample_data_or_seg_to_shape",
+                    "resampling_fn_seg": "resample_data_or_seg_to_shape",
+                    "resampling_fn_data_kwargs": {
+                        "is_seg": False,
+                        "order": 3,
+                        "order_z": 0,
+                        "force_separate_z": None,
+                    },
+                    "resampling_fn_seg_kwargs": {
+                        "is_seg": True,
+                        "order": 1,
+                        "order_z": 0,
+                        "force_separate_z": None,
+                    },
+                    "resampling_fn_probabilities": "resample_data_or_seg_to_shape",
+                    "resampling_fn_probabilities_kwargs": {
+                        "is_seg": False,
+                        "order": 1,
+                        "order_z": 0,
+                        "force_separate_z": None,
+                    },
+                    "architecture": {
+                        "network_class_name": "nnunetv2.network_architecture.plainconv_unet_head.PlainConvUNetHead",
+                        "arch_kwargs": arch_kwargs,
+                        "_kw_requires_import": [
+                            "conv_op",
+                            "norm_op",
+                            "dropout_op",
+                            "nonlin",
+                        ],
+                    },
+                    "batch_dice": True,
+                }
+            },
+            "experiment_planner_used": "MultiHeadPlanner",
+            "label_manager": "LabelManager",
+        }
+
+        plans_manager = PlansManager(plans)
+        config_manager = plans_manager.get_configuration("3d_fullres", dataset_json)
+
+        # build network and load weights
+        num_input_channels = determine_num_input_channels(plans_manager, config_manager, dataset_json)
+        num_heads = len(class_names)
+        trainer_cls = recursive_find_python_class(
+            join(nnunetv2.__path__[0], "training", "nnUNetTrainer"),
+            "nnUNetTrainer",
+            "nnunetv2.training.nnUNetTrainer",
+        )
+        network = trainer_cls.build_network_architecture(
+            config_manager.network_arch_class_name,
+            config_manager.network_arch_init_kwargs,
+            config_manager.network_arch_init_kwargs_req_import,
+            num_input_channels,
+            num_heads,
+            enable_deep_supervision=False,
+        )
+
+        network.encoder.load_state_dict(torch.load(encoder_path, map_location="cpu"))
+        network.decoder.load_state_dict(torch.load(decoder_path, map_location="cpu"))
+        for cname in class_names:
+            network.heads[cname].load_state_dict(head_state_dicts[cname])
+
+        # book keeping for predictor
+        self.network = network
+        self.plans_manager = plans_manager
+        self.configuration_manager = config_manager
+        self.dataset_json = dataset_json
+        self.trainer_name = "nnUNetTrainer"
+        self.allowed_mirroring_axes = (0, 1, 2)
+        self.label_manager = plans_manager.get_label_manager(dataset_json)
+        self.list_of_parameters = [network.state_dict()]
+
+        if (
+            "nnUNet_compile" in os.environ
+            and os.environ["nnUNet_compile"].lower() in ("true", "1", "t")
+            and not isinstance(network, OptimizedModule)
+        ):
+            print("Using torch.compile")
+            self.network = torch.compile(network)
 
     def manual_initialization(self, network: nn.Module, plans_manager: PlansManager,
                               configuration_manager: ConfigurationManager, parameters: Optional[List[dict]],
