@@ -235,20 +235,51 @@ class nnUNetPredictor(object):
         """
 
         # recover class names from head file names and load their weights
-        class_names: List[str] = []
         head_state_dicts: Dict[str, dict] = {}
         for hp in head_paths:
             cname = os.path.basename(hp).replace("_head.pth", "")
-            class_names.append(cname)
             head_state_dicts[cname] = torch.load(hp, map_location="cpu")
 
-        class_names = sorted(class_names)
+        canonical_order = [
+            "ER",
+            "mitochondria",
+            "MT",
+            "vesicle",
+            "membrane",
+            "ER_memb",
+            "mito_memb",
+            "MT_memb",
+            "vesicle_memb",
+            "actin",
+        ]
+        class_names: List[str] = [c for c in canonical_order if c in head_state_dicts]
 
         # build dataset json describing channels and labels
-        labels = {cn: i + 1 for i, cn in enumerate(class_names)}
+        label_ids = {cn: i + 1 for i, cn in enumerate(class_names)}
+        labels: Dict[str, Union[int, List[int]]] = {"background": 0}
+        labels.update(
+            {
+                "ER": [label_ids["ER"], label_ids["ER_memb"]],
+                "mitochondria": [label_ids["mitochondria"], label_ids["mito_memb"]],
+                "MT": [label_ids["MT"], label_ids["MT_memb"]],
+                "vesicle": [label_ids["vesicle"], label_ids["vesicle_memb"]],
+                "membrane": [
+                    label_ids["membrane"],
+                    label_ids["ER_memb"],
+                    label_ids["mito_memb"],
+                    label_ids["MT_memb"],
+                    label_ids["vesicle_memb"],
+                ],
+                "ER_memb": label_ids["ER_memb"],
+                "mito_memb": label_ids["mito_memb"],
+                "MT_memb": label_ids["MT_memb"],
+                "vesicle_memb": label_ids["vesicle_memb"],
+                "actin": label_ids["actin"],
+            }
+        )
         dataset_json = {
             "channel_names": {"0": "cryoET"},
-            "labels": {"background": 0, **labels},
+            "labels": labels,
             "regions_class_order": list(range(1, len(class_names) + 1)),
             "file_ending": ".mrc",
         }
@@ -325,6 +356,17 @@ class nnUNetPredictor(object):
             },
             "experiment_planner_used": "MultiHeadPlanner",
             "label_manager": "LabelManager",
+            "foreground_intensity_properties_per_channel": {
+                "0": {
+                    "max": 0.8986680507659912,
+                    "mean": 0.6431100368499756,
+                    "median": 0.7112212181091309,
+                    "min": 0.13664640486240387,
+                    "percentile_00_5": 0.3764705955982208,
+                    "percentile_99_5": 0.8102210760116577,
+                    "std": 0.1294332891702652,
+                }
+            },
         }
 
         plans_manager = PlansManager(plans)
