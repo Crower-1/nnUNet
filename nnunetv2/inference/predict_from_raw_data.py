@@ -240,43 +240,28 @@ class nnUNetPredictor(object):
             cname = os.path.basename(hp).replace("_head.pth", "")
             head_state_dicts[cname] = torch.load(hp, map_location="cpu")
 
-        canonical_order = [
-            "ER",
-            "mitochondria",
-            "MT",
-            "vesicle",
-            "membrane",
-            "ER_memb",
-            "mito_memb",
-            "MT_memb",
-            "vesicle_memb",
-            "actin",
-        ]
-        class_names: List[str] = [c for c in canonical_order if c in head_state_dicts]
+        # determine class order from available heads (sorted for determinism)
+        class_names: List[str] = sorted(head_state_dicts.keys())
 
         # build dataset json describing channels and labels
         label_ids = {cn: i + 1 for i, cn in enumerate(class_names)}
         labels: Dict[str, Union[int, List[int]]] = {"background": 0}
-        labels.update(
-            {
-                "ER": [label_ids["ER"], label_ids["ER_memb"]],
-                "mitochondria": [label_ids["mitochondria"], label_ids["mito_memb"]],
-                "MT": [label_ids["MT"], label_ids["MT_memb"]],
-                "vesicle": [label_ids["vesicle"], label_ids["vesicle_memb"]],
-                "membrane": [
-                    label_ids["membrane"],
-                    label_ids["ER_memb"],
-                    label_ids["mito_memb"],
-                    label_ids["MT_memb"],
-                    label_ids["vesicle_memb"],
-                ],
-                "ER_memb": label_ids["ER_memb"],
-                "mito_memb": label_ids["mito_memb"],
-                "MT_memb": label_ids["MT_memb"],
-                "vesicle_memb": label_ids["vesicle_memb"],
-                "actin": label_ids["actin"],
-            }
-        )
+
+        memb_classes = [cn for cn in class_names if cn.endswith("_memb")]
+        for cn in class_names:
+            if cn.endswith("_memb"):
+                # membrane-only class
+                labels[cn] = label_ids[cn]
+            else:
+                memb_name = f"{cn}_memb"
+                if memb_name in label_ids:
+                    labels[cn] = [label_ids[cn], label_ids[memb_name]]
+                else:
+                    labels[cn] = label_ids[cn]
+
+        if "membrane" in label_ids:
+            labels["membrane"] = [label_ids["membrane"]] + [label_ids[m] for m in memb_classes]
+
         dataset_json = {
             "channel_names": {"0": "cryoET"},
             "labels": labels,
