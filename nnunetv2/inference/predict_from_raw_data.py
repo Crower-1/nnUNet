@@ -247,7 +247,7 @@ class nnUNetPredictor(object):
         label_ids = {cn: i + 1 for i, cn in enumerate(class_names)}
         labels: Dict[str, Union[int, List[int]]] = {"background": 0}
 
-        memb_classes = [cn for cn in class_names if cn.endswith("_memb")]
+        memb_classes = sorted([cn for cn in class_names if cn.endswith("_memb")])
         for cn in class_names:
             if cn.endswith("_memb"):
                 # membrane-only class
@@ -262,10 +262,31 @@ class nnUNetPredictor(object):
         if "membrane" in label_ids:
             labels["membrane"] = [label_ids["membrane"]] + [label_ids[m] for m in memb_classes]
 
+        base_with_memb = sorted(
+            [
+                cn
+                for cn in class_names
+                if not cn.endswith("_memb") and cn != "membrane" and f"{cn}_memb" in class_names
+            ]
+        )
+        others = sorted(
+            [
+                cn
+                for cn in class_names
+                if cn not in base_with_memb and cn != "membrane" and not cn.endswith("_memb")
+            ]
+        )
+
+        regions_class_order: List[int] = [label_ids[cn] for cn in base_with_memb]
+        if "membrane" in label_ids:
+            regions_class_order.append(label_ids["membrane"])
+        regions_class_order += [label_ids[cn] for cn in memb_classes]
+        regions_class_order += [label_ids[cn] for cn in others]
+
         dataset_json = {
             "channel_names": {"0": "cryoET"},
             "labels": labels,
-            "regions_class_order": list(range(1, len(class_names) + 1)),
+            "regions_class_order": regions_class_order,
             "file_ending": ".mrc",
         }
 
