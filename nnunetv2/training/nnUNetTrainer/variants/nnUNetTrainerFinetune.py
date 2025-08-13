@@ -30,7 +30,7 @@ class nnUNetTrainerFinetune(nnUNetTrainer):
 
     def _load_module_weights(self, module: nn.Module, path: str | None):
         if path is not None and os.path.isfile(path):
-            sd = torch.load(path, map_location=self.device)
+            sd = torch.load(path, map_location=self.device, weights_only=True)
             msd = module.state_dict()
             filtered_sd = {}
             dropped = []
@@ -44,7 +44,11 @@ class nnUNetTrainerFinetune(nnUNetTrainer):
                     f"Skipped loading weights for keys with incompatible shapes: {dropped}",
                     also_print_to_console=True,
                 )
-            module.load_state_dict(filtered_sd, strict=False)
+            missing, unexpected = module.load_state_dict(filtered_sd, strict=False)
+            if missing:
+                self.print_to_log_file(f"Missing keys when loading weights: {missing}")
+            if unexpected:
+                self.print_to_log_file(f"Unexpected keys when loading weights: {unexpected}")
 
     def _load_head_weights(self, mod: nn.Module):
         if self.head_weights is None:
