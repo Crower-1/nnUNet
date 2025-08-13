@@ -31,7 +31,7 @@ class nnUNetTrainerFinetune(nnUNetTrainer):
     def _load_module_weights(self, module: nn.Module, path: str | None):
         if path is not None and os.path.isfile(path):
             sd = torch.load(path, map_location=self.device)
-            module.load_state_dict(sd)
+            module.load_state_dict(sd, strict=False)
 
     def _load_head_weights(self, mod: nn.Module):
         if self.head_weights is None:
@@ -53,7 +53,7 @@ class nnUNetTrainerFinetune(nnUNetTrainer):
             for name, file in mapping.items():
                 if name in mod.heads and os.path.isfile(file):
                     sd = torch.load(file, map_location=self.device)
-                    mod.heads[name].load_state_dict(sd)
+                    mod.heads[name].load_state_dict(sd, strict=False)
         elif hasattr(mod, 'head'):
             if isinstance(self.head_weights, str):
                 self._load_module_weights(mod.head, self.head_weights)
