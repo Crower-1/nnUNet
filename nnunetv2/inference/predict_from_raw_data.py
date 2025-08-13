@@ -6,7 +6,7 @@ from copy import deepcopy
 from queue import Queue
 from threading import Thread
 from time import sleep
-from typing import Tuple, Union, List, Optional
+from typing import Tuple, Union, List, Optional, Dict
 
 import numpy as np
 import torch
@@ -212,6 +212,223 @@ class nnUNetPredictor(object):
                 and not isinstance(self.network, OptimizedModule):
             print('Using torch.compile')
             self.network = torch.compile(self.network)
+
+    def initialize_plainconv_unet_head(
+        self,
+        encoder_path: str,
+        decoder_path: str,
+        head_paths: List[str],
+        patch_size: Tuple[int, int, int] = (128, 128, 128),
+    ):
+        """Initialize network from separate encoder/decoder/head weight files.
+
+        This helper builds a :class:`PlainConvUNetHead` with a fixed 3D full
+        resolution configuration. ``class_names`` are inferred from the
+        filenames of ``*_head.pth`` files. ``patch_size`` defaults to
+        ``(128, 128, 128)`` but can be overridden.
+
+        Args:
+            encoder_path: Path to ``encoder.pth``.
+            decoder_path: Path to ``decoder.pth``.
+            head_paths:  List of ``<class_name>_head.pth`` files.
+            patch_size:  Spatial patch size used by the configuration.
+        """
+
+        # recover class names from head file names and load their weights
+        head_state_dicts: Dict[str, dict] = {}
+        for hp in head_paths:
+            cname = os.path.basename(hp).replace("_head.pth", "")
+            head_state_dicts[cname] = torch.load(hp, map_location="cpu")
+
+        # determine class order from available heads (sorted for determinism)
+        class_names: List[str] = sorted(head_state_dicts.keys())
+
+        # build dataset json describing channels and labels
+        label_ids = {cn: i + 1 for i, cn in enumerate(class_names)}
+        labels: Dict[str, Union[int, List[int]]] = {"background": 0}
+
+        memb_classes = sorted([cn for cn in class_names if cn.endswith("_memb")])
+        for cn in class_names:
+            if cn.endswith("_memb"):
+                # membrane-only class
+                labels[cn] = label_ids[cn]
+            else:
+                memb_name = f"{cn}_memb"
+                if memb_name in label_ids:
+                    labels[cn] = [label_ids[cn], label_ids[memb_name]]
+                else:
+                    labels[cn] = label_ids[cn]
+
+        if "membrane" in label_ids:
+            labels["membrane"] = [label_ids["membrane"]] + [label_ids[m] for m in memb_classes]
+
+        base_with_memb = sorted(
+            [
+                cn
+                for cn in class_names
+                if not cn.endswith("_memb") and cn != "membrane" and f"{cn}_memb" in class_names
+            ]
+        )
+        others = sorted(
+            [
+                cn
+                for cn in class_names
+                if cn not in base_with_memb and cn != "membrane" and not cn.endswith("_memb")
+            ]
+        )
+
+        regions_class_order: List[int] = [label_ids[cn] for cn in base_with_memb]
+        if "membrane" in label_ids:
+            regions_class_order.append(label_ids["membrane"])
+        regions_class_order += [label_ids[cn] for cn in memb_classes]
+        regions_class_order += [label_ids[cn] for cn in others]
+
+        dataset_json = {
+            "channel_names": {"0": "cryoET"},
+            "labels": labels,
+            "regions_class_order": regions_class_order,
+            "file_ending": ".mrc",
+        }
+
+        # assemble plans with fixed architecture, inserting class names and patch size
+        arch_kwargs = {
+            "n_stages": 6,
+            "features_per_stage": [32, 64, 128, 256, 320, 320],
+            "conv_op": "torch.nn.modules.conv.Conv3d",
+            "kernel_sizes": [[3, 3, 3]] * 6,
+            "strides": [[1, 1, 1], [2, 2, 2], [2, 2, 2], [2, 2, 2], [2, 2, 2], [2, 2, 2]],
+            "n_conv_per_stage": [2, 2, 2, 2, 2, 2],
+            "n_conv_per_stage_decoder": [2, 2, 2, 2, 2],
+            "conv_bias": True,
+            "norm_op": "torch.nn.modules.instancenorm.InstanceNorm3d",
+            "norm_op_kwargs": {"eps": 1e-05, "affine": True},
+            "dropout_op": None,
+            "dropout_op_kwargs": None,
+            "nonlin": "torch.nn.LeakyReLU",
+            "nonlin_kwargs": {"inplace": True},
+            "class_names": class_names,
+        }
+        plans = {
+            "dataset_name": "PlainConvUNetHead",
+            "plans_name": "nnUNetPlans",
+            "original_median_spacing_after_transp": [17.14285659790039] * 3,
+            "original_median_shape_after_transp": [214, 928, 960],
+            "image_reader_writer": "MRCIO",
+            "transpose_forward": [0, 1, 2],
+            "transpose_backward": [0, 1, 2],
+            "configurations": {
+                "3d_fullres": {
+                    "data_identifier": "nnUNetPlans_3d_fullres",
+                    "preprocessor_name": "DefaultPreprocessor",
+                    "batch_size": 2,
+                    "patch_size": list(patch_size),
+                    "median_image_size_in_voxels": [214.0, 928.0, 960.0],
+                    "spacing": [17.14285659790039] * 3,
+                    "normalization_schemes": ["ZScoreNormalization"],
+                    "use_mask_for_norm": [False],
+                    "resampling_fn_data": "resample_data_or_seg_to_shape",
+                    "resampling_fn_seg": "resample_data_or_seg_to_shape",
+                    "resampling_fn_data_kwargs": {
+                        "is_seg": False,
+                        "order": 3,
+                        "order_z": 0,
+                        "force_separate_z": None,
+                    },
+                    "resampling_fn_seg_kwargs": {
+                        "is_seg": True,
+                        "order": 1,
+                        "order_z": 0,
+                        "force_separate_z": None,
+                    },
+                    "resampling_fn_probabilities": "resample_data_or_seg_to_shape",
+                    "resampling_fn_probabilities_kwargs": {
+                        "is_seg": False,
+                        "order": 1,
+                        "order_z": 0,
+                        "force_separate_z": None,
+                    },
+                    "architecture": {
+                        "network_class_name": "nnunetv2.network_architecture.plainconv_unet_head.PlainConvUNetHead",
+                        "arch_kwargs": arch_kwargs,
+                        "_kw_requires_import": [
+                            "conv_op",
+                            "norm_op",
+                            "dropout_op",
+                            "nonlin",
+                        ],
+                    },
+                    "batch_dice": True,
+                }
+            },
+            "experiment_planner_used": "MultiHeadPlanner",
+            "label_manager": "LabelManager",
+            "foreground_intensity_properties_per_channel": {
+                "0": {
+                    "max": 0.8986680507659912,
+                    "mean": 0.6431100368499756,
+                    "median": 0.7112212181091309,
+                    "min": 0.13664640486240387,
+                    "percentile_00_5": 0.3764705955982208,
+                    "percentile_99_5": 0.8102210760116577,
+                    "std": 0.1294332891702652,
+                }
+            },
+        }
+
+        plans_manager = PlansManager(plans)
+        config_manager = plans_manager.get_configuration("3d_fullres", dataset_json)
+
+        # build network and load weights
+        num_input_channels = determine_num_input_channels(plans_manager, config_manager, dataset_json)
+
+        # the decoder checkpoint may originate from a model with more heads than
+        # we currently load. infer the original number of segmentation channels
+        # from the decoder weights so that we can still load them even if some
+        # heads are missing.
+        decoder_state = torch.load(decoder_path, map_location="cpu")
+        seg_keys = [k for k in decoder_state if k.startswith("seg_layers.") and k.endswith(".weight")]
+        if seg_keys:
+            decoder_num_classes = decoder_state[seg_keys[0]].shape[0]
+        else:
+            decoder_num_classes = len(class_names)
+
+        trainer_cls = recursive_find_python_class(
+            join(nnunetv2.__path__[0], "training", "nnUNetTrainer"),
+            "nnUNetTrainer",
+            "nnunetv2.training.nnUNetTrainer",
+        )
+        network = trainer_cls.build_network_architecture(
+            config_manager.network_arch_class_name,
+            config_manager.network_arch_init_kwargs,
+            config_manager.network_arch_init_kwargs_req_import,
+            num_input_channels,
+            decoder_num_classes,
+            enable_deep_supervision=False,
+        )
+
+        network.encoder.load_state_dict(torch.load(encoder_path, map_location="cpu"))
+        # load decoder weights (contains seg_layers for original number of classes)
+        network.decoder.load_state_dict(decoder_state, strict=False)
+        for cname in class_names:
+            network.heads[cname].load_state_dict(head_state_dicts[cname])
+
+        # book keeping for predictor
+        self.network = network
+        self.plans_manager = plans_manager
+        self.configuration_manager = config_manager
+        self.dataset_json = dataset_json
+        self.trainer_name = "nnUNetTrainer"
+        self.allowed_mirroring_axes = (0, 1, 2)
+        self.label_manager = plans_manager.get_label_manager(dataset_json)
+        self.list_of_parameters = [network.state_dict()]
+
+        if (
+            "nnUNet_compile" in os.environ
+            and os.environ["nnUNet_compile"].lower() in ("true", "1", "t")
+            and not isinstance(network, OptimizedModule)
+        ):
+            print("Using torch.compile")
+            self.network = torch.compile(network)
 
     def manual_initialization(self, network: nn.Module, plans_manager: PlansManager,
                               configuration_manager: ConfigurationManager, parameters: Optional[List[dict]],
