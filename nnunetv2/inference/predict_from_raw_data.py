@@ -380,7 +380,18 @@ class nnUNetPredictor(object):
 
         # build network and load weights
         num_input_channels = determine_num_input_channels(plans_manager, config_manager, dataset_json)
-        num_heads = len(class_names)
+
+        # the decoder checkpoint may originate from a model with more heads than
+        # we currently load. infer the original number of segmentation channels
+        # from the decoder weights so that we can still load them even if some
+        # heads are missing.
+        decoder_state = torch.load(decoder_path, map_location="cpu")
+        seg_keys = [k for k in decoder_state if k.startswith("seg_layers.") and k.endswith(".weight")]
+        if seg_keys:
+            decoder_num_classes = decoder_state[seg_keys[0]].shape[0]
+        else:
+            decoder_num_classes = len(class_names)
+
         trainer_cls = recursive_find_python_class(
             join(nnunetv2.__path__[0], "training", "nnUNetTrainer"),
             "nnUNetTrainer",
@@ -391,12 +402,13 @@ class nnUNetPredictor(object):
             config_manager.network_arch_init_kwargs,
             config_manager.network_arch_init_kwargs_req_import,
             num_input_channels,
-            num_heads,
+            decoder_num_classes,
             enable_deep_supervision=False,
         )
 
         network.encoder.load_state_dict(torch.load(encoder_path, map_location="cpu"))
-        network.decoder.load_state_dict(torch.load(decoder_path, map_location="cpu"))
+        # load decoder weights (contains seg_layers for original number of classes)
+        network.decoder.load_state_dict(decoder_state, strict=False)
         for cname in class_names:
             network.heads[cname].load_state_dict(head_state_dicts[cname])
 
