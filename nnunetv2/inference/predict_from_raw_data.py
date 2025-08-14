@@ -241,47 +241,54 @@ class nnUNetPredictor(object):
             head_state_dicts[cname] = torch.load(hp, map_location="cpu")
 
         # determine class order from available heads (sorted for determinism)
-        class_names: List[str] = sorted(head_state_dicts.keys())
+        class_names_sorted: List[str] = sorted(head_state_dicts.keys())
 
-        # build dataset json describing channels and labels
-        label_ids = {cn: i + 1 for i, cn in enumerate(class_names)}
-        labels: Dict[str, Union[int, List[int]]] = {"background": 0}
-
-        memb_classes = sorted([cn for cn in class_names if cn.endswith("_memb")])
-        for cn in class_names:
-            if cn.endswith("_memb"):
-                # membrane-only class
-                labels[cn] = label_ids[cn]
-            else:
-                memb_name = f"{cn}_memb"
-                if memb_name in label_ids:
-                    labels[cn] = [label_ids[cn], label_ids[memb_name]]
-                else:
-                    labels[cn] = label_ids[cn]
-
-        if "membrane" in label_ids:
-            labels["membrane"] = [label_ids["membrane"]] + [label_ids[m] for m in memb_classes]
-
+        # categorize classes to mimic previous ordering logic
+        memb_classes = sorted([cn for cn in class_names_sorted if cn.endswith("_memb")])
         base_with_memb = sorted(
             [
                 cn
-                for cn in class_names
-                if not cn.endswith("_memb") and cn != "membrane" and f"{cn}_memb" in class_names
+                for cn in class_names_sorted
+                if not cn.endswith("_memb") and cn != "membrane" and f"{cn}_memb" in class_names_sorted
             ]
         )
         others = sorted(
             [
                 cn
-                for cn in class_names
+                for cn in class_names_sorted
                 if cn not in base_with_memb and cn != "membrane" and not cn.endswith("_memb")
             ]
         )
 
-        regions_class_order: List[int] = [label_ids[cn] for cn in base_with_memb]
-        if "membrane" in label_ids:
-            regions_class_order.append(label_ids["membrane"])
-        regions_class_order += [label_ids[cn] for cn in memb_classes]
-        regions_class_order += [label_ids[cn] for cn in others]
+        # reorder class names to follow existing region ordering
+        class_names: List[str] = (
+            base_with_memb
+            + (["membrane"] if "membrane" in class_names_sorted else [])
+            + memb_classes
+            + others
+        )
+
+        # build dataset json describing channels and labels in the new order
+        label_ids = {cn: i + 1 for i, cn in enumerate(class_names)}
+        labels: Dict[str, Union[int, List[int]]] = {"background": 0}
+
+        for cn in base_with_memb:
+            memb_name = f"{cn}_memb"
+            if memb_name in label_ids:
+                labels[cn] = [label_ids[cn], label_ids[memb_name]]
+            else:
+                labels[cn] = label_ids[cn]
+
+        if "membrane" in class_names:
+            labels["membrane"] = [label_ids["membrane"]] + [label_ids[m] for m in memb_classes]
+
+        for cn in memb_classes:
+            labels[cn] = label_ids[cn]
+
+        for cn in others:
+            labels[cn] = label_ids[cn]
+
+        regions_class_order: List[int] = list(range(1, len(class_names) + 1))
 
         dataset_json = {
             "channel_names": {"0": "cryoET"},
