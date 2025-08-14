@@ -28,13 +28,23 @@ class nnUNetTrainerFinetune(nnUNetTrainer):
             'head_weights': head_weights,
         })
 
-    def _load_module_weights(self, module: nn.Module, path: str | None):
+    def _load_module_weights(
+        self,
+        module: nn.Module,
+        path: str | None,
+        *,
+        exclude: list[str] | None = None,
+    ):
         if path is not None and os.path.isfile(path):
             sd = torch.load(path, map_location=self.device, weights_only=True)
             msd = module.state_dict()
             filtered_sd = {}
             dropped = []
+            exclude = exclude or []
             for k, v in sd.items():
+                if any(k.startswith(ex) for ex in exclude):
+                    dropped.append(k)
+                    continue
                 if k in msd and msd[k].shape == v.shape:
                     filtered_sd[k] = v
                 else:
@@ -91,7 +101,7 @@ class nnUNetTrainerFinetune(nnUNetTrainer):
 
             # load pretrained weights
             self._load_module_weights(mod.encoder, self.encoder_weights)
-            self._load_module_weights(mod.decoder, self.decoder_weights)
+            self._load_module_weights(mod.decoder, self.decoder_weights, exclude=['seg_layers'])
             self._load_head_weights(mod)
 
             # freeze according to mode
@@ -99,6 +109,9 @@ class nnUNetTrainerFinetune(nnUNetTrainer):
             if mode == 'head':
                 self._freeze_module(mod.encoder)
                 self._freeze_module(mod.decoder)
+                for n, p in mod.decoder.named_parameters():
+                    if n.startswith('seg_layers'):
+                        p.requires_grad = True
             elif mode == 'decoder_head':
                 self._freeze_module(mod.encoder)
             elif mode in ('all', 'scratch'):
