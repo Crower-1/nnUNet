@@ -109,9 +109,10 @@ class nnUNetTrainerFinetune(nnUNetTrainer):
             if mode == 'head':
                 self._freeze_module(mod.encoder)
                 self._freeze_module(mod.decoder)
-                for n, p in mod.decoder.named_parameters():
-                    if n.startswith('seg_layers'):
-                        p.requires_grad = True
+                # It can not improve the performence
+                # for n, p in mod.decoder.named_parameters():
+                #     if n.startswith('seg_layers'):
+                #         p.requires_grad = True
             elif mode == 'decoder_head':
                 self._freeze_module(mod.encoder)
             elif mode in ('all', 'scratch'):
