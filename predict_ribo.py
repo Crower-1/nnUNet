@@ -80,7 +80,18 @@ def parse_args():
         "--smallest_size", type=int, default=150,
         help="Minimum voxel count to keep an instance (default: 150)"
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--pixel_size", type=float, default=None,
+        help="Override voxel spacing for the input (applies the same value to z/y/x)"
+    )
+    parser.add_argument(
+        "--score_thr", type=float, default=None,
+        help="Optional probability threshold (0-1) applied to ribo_prob to create the binary mask"
+    )
+    args = parser.parse_args()
+    if args.score_thr is not None and not (0.0 < args.score_thr < 1.0):
+        parser.error("--score_thr must be between 0 and 1 (exclusive)")
+    return args
 
 
 def main():
@@ -89,6 +100,8 @@ def main():
     save_targets = set(args.save)
     do_opening = args.do_opening
     smallest_size = args.smallest_size
+    pixel_size = args.pixel_size
+    score_thr = args.score_thr
 
     # Initialize predictor
     predictor = nnUNetPredictor(
@@ -109,6 +122,8 @@ def main():
 
     # Read input image
     img, props = MRCIO().read_images([img_path])
+    if pixel_size is not None:
+        props = {'spacing': (pixel_size, pixel_size, pixel_size)}
 
     # Prediction
     semantic_results, prob_results = predictor.predict_single_npy_array(
@@ -118,10 +133,12 @@ def main():
     # Derive ribo mask and probability
     ribo_binary = np.zeros_like(semantic_results, dtype=np.uint8)
     ribo_binary[semantic_results == 11] = 1
-    ribo_prob = prob_results[10]
+    ribo_prob = prob_results[11]
 
     # Optional opening
     processed = ribo_binary
+    if score_thr is not None:
+        processed = (ribo_prob > score_thr).astype(np.uint8)
     if do_opening:
         processed = opening(processed, ball(3))
 
