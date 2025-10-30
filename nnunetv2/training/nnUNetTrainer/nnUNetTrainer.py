@@ -50,6 +50,7 @@ from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
 from nnunetv2.inference.sliding_window_prediction import compute_gaussian
 from nnunetv2.paths import nnUNet_preprocessed, nnUNet_results
 from nnunetv2.training.data_augmentation.compute_initial_patch_size import get_patch_size
+from nnunetv2.training.data_augmentation.custom_transforms import MissingEdgeTransform
 from nnunetv2.training.dataloading.nnunet_dataset import infer_dataset_class
 from nnunetv2.training.dataloading.data_loader import nnUNetDataLoader
 from nnunetv2.training.logging.nnunet_logger import nnUNetLogger
@@ -783,6 +784,10 @@ class nnUNetTrainer(object):
                 p_per_channel=1,
                 p_retain_stats=1
             ), apply_probability=0.3
+        ))
+        transforms.append(RandomTransform(
+            MissingEdgeTransform(),
+            apply_probability=0.5
         ))
         if mirror_axes is not None and len(mirror_axes) > 0:
             transforms.append(
