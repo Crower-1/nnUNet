@@ -1,3 +1,15 @@
+"""
+for f in $(find . -type f -name "*_wbp_corrected.mrc"); do
+    echo "Processing $f ..."
+    /usr/bin/env python3 "/home/liushuo/Documents/code/nnUNet/predict_ribo.py" \
+        --img_path "$f" \
+        --save ribo \
+        --smallest_size 50 \
+        --score_thr 0.05
+done
+
+"""
+
 #!/usr/bin/env python3
 """
 A command-line tool to perform nnUNet segmentation on a 3D MRC image,
