@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from torch import nn
+import torch.nn.functional as F
 from dynamic_network_architectures.architectures.unet import PlainConvUNet
 from torch.nn.modules.conv import _ConvNd
 from torch.nn.modules.dropout import _DropoutNd
@@ -9,7 +10,7 @@ import copy
 
 
 class PlainConvUNetHead(PlainConvUNet):
-    """PlainConvUNet with the last decoder block separated into `head`."""
+    """PlainConvUNet with shared decoder and lightweight per-class 1x1 heads."""
 
     def __init__(self,
                  input_channels: int,
@@ -37,39 +38,41 @@ class PlainConvUNetHead(PlainConvUNet):
                          norm_op_kwargs, dropout_op, dropout_op_kwargs, nonlin,
                          nonlin_kwargs, deep_supervision, nonlin_first)
 
-        # copy last decoder stage before removing it
-        last_transpconv = copy.deepcopy(self.decoder.transpconvs[-1])
-        last_stage = copy.deepcopy(self.decoder.stages[-1])
         last_seg_layer = copy.deepcopy(self.decoder.seg_layers[-1])
-
-        self.decoder.transpconvs = self.decoder.transpconvs[:-1]
-        self.decoder.stages = self.decoder.stages[:-1]
-        self.decoder.seg_layers = self.decoder.seg_layers[:-1]
 
         # handle class names
         if class_names is None:
             class_names = [f'class_{i}' for i in range(num_classes)]
         self.class_names = class_names
 
-        # build heads
+        # build lightweight per-class heads, decoder remains shared and complete
         self.heads = nn.ModuleDict()
         for cn in self.class_names:
-            seg_layer = type(last_seg_layer)(
+            self.heads[cn] = type(last_seg_layer)(
                 last_seg_layer.in_channels,
                 1,
-                kernel_size=last_seg_layer.kernel_size,
-                stride=last_seg_layer.stride,
-                padding=last_seg_layer.padding,
-                dilation=last_seg_layer.dilation,
-                groups=last_seg_layer.groups,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                dilation=1,
+                groups=1,
                 bias=last_seg_layer.bias is not None,
                 padding_mode=getattr(last_seg_layer, 'padding_mode', 'zeros')
             )
-            self.heads[cn] = nn.ModuleDict({
-                'transpconv': copy.deepcopy(last_transpconv),
-                'stage': copy.deepcopy(last_stage),
-                'seg_layer': seg_layer
-            })
+
+    def _fused_head_logits(self, features: torch.Tensor) -> torch.Tensor:
+        if len(self.heads) == 0:
+            raise RuntimeError("PlainConvUNetHead has no heads configured.")
+
+        heads = list(self.heads.values())
+        weight = torch.cat([h.weight for h in heads], dim=0)
+        bias = None if heads[0].bias is None else torch.cat([h.bias for h in heads], dim=0)
+
+        if features.ndim == 5:
+            return F.conv3d(features, weight, bias, stride=1, padding=0)
+        if features.ndim == 4:
+            return F.conv2d(features, weight, bias, stride=1, padding=0)
+        raise RuntimeError(f"Unsupported feature rank {features.ndim}, expected 4D/5D tensor.")
 
     def forward(self, x):
         skips = self.encoder(x)
@@ -79,18 +82,11 @@ class PlainConvUNetHead(PlainConvUNet):
             y = self.decoder.transpconvs[s](lres_input)
             y = torch.cat((y, skips[-(s + 2)]), 1)
             y = self.decoder.stages[s](y)
-            if self.decoder.deep_supervision:
+            if self.decoder.deep_supervision and s < (len(self.decoder.stages) - 1):
                 seg_outputs.append(self.decoder.seg_layers[s](y))
             lres_input = y
 
-        head_predictions = []
-        for head in self.heads.values():
-            y = head['transpconv'](lres_input)
-            y = torch.cat((y, skips[0]), 1)
-            y = head['stage'](y)
-            seg_head = head['seg_layer'](y)
-            head_predictions.append(seg_head)
-        seg = torch.cat(head_predictions, 1)
+        seg = self._fused_head_logits(lres_input)
         seg_outputs.append(seg)
         seg_outputs = seg_outputs[::-1]
         if not self.decoder.deep_supervision:
@@ -110,11 +106,7 @@ class PlainConvUNetHead(PlainConvUNet):
         for s in range(len(self.decoder.stages)):
             output += self.decoder.stages[s].compute_conv_feature_map_size(skip_sizes[-(s + 1)])
             output += np.prod([self.encoder.output_channels[-(s + 2)], *skip_sizes[-(s + 1)]], dtype=np.int64)
-            if self.decoder.deep_supervision:
-                output += np.prod([self.decoder.num_classes, *skip_sizes[-(s + 1)]], dtype=np.int64)
-        for head in self.heads.values():
-            output += head['stage'].compute_conv_feature_map_size(skip_sizes[0])
-            output += np.prod([self.encoder.output_channels[0], *skip_sizes[0]], dtype=np.int64)
-            output += np.prod([head['seg_layer'].out_channels, *skip_sizes[0]], dtype=np.int64)
+            if self.decoder.deep_supervision and s < (len(self.decoder.stages) - 1):
+                output += np.prod([self.decoder.seg_layers[s].out_channels, *skip_sizes[-(s + 1)]], dtype=np.int64)
+        output += np.prod([len(self.heads), *skip_sizes[0]], dtype=np.int64)
         return output
-

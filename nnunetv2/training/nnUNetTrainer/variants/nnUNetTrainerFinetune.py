@@ -79,10 +79,44 @@ class nnUNetTrainerFinetune(nnUNetTrainer):
                 mapping = {}
             for name, file in mapping.items():
                 if name in mod.heads and os.path.isfile(file):
-                    self._load_module_weights(mod.heads[name], file)
+                    self._load_new_head_weights(mod.heads[name], file, name)
         elif hasattr(mod, 'head'):
             if isinstance(self.head_weights, str):
                 self._load_module_weights(mod.head, self.head_weights)
+
+    def _load_new_head_weights(self, module: nn.Module, path: str, head_name: str):
+        sd = torch.load(path, map_location=self.device, weights_only=True)
+        if not isinstance(sd, dict):
+            raise RuntimeError(
+                f"Head checkpoint {path} for '{head_name}' is invalid. Expected a state_dict with 'weight'/'bias'."
+            )
+
+        legacy_prefixes = ("transpconv.", "stage.", "seg_layer.")
+        if any(any(k.startswith(prefix) for prefix in legacy_prefixes) for k in sd.keys()):
+            raise RuntimeError(
+                f"Head checkpoint {path} for '{head_name}' uses the legacy multi-block format "
+                f"(transpconv/stage/seg_layer). This codebase only supports the new 1x1 head format. "
+                f"Please retrain or re-export head weights."
+            )
+
+        allowed_keys = {"weight", "bias"}
+        unexpected = [k for k in sd.keys() if k not in allowed_keys]
+        if unexpected:
+            raise RuntimeError(
+                f"Head checkpoint {path} for '{head_name}' contains unsupported keys: {unexpected}. "
+                f"Expected only 'weight' and optional 'bias'."
+            )
+        if "weight" not in sd:
+            raise RuntimeError(
+                f"Head checkpoint {path} for '{head_name}' is missing required key 'weight'."
+            )
+
+        missing, unexpected_load = module.load_state_dict(sd, strict=False)
+        if missing or unexpected_load:
+            raise RuntimeError(
+                f"Head checkpoint {path} for '{head_name}' does not match the current 1x1 head module. "
+                f"Missing keys: {missing}; unexpected keys: {unexpected_load}."
+            )
 
     def _freeze_module(self, module: nn.Module):
         for p in module.parameters():
@@ -151,4 +185,3 @@ class nnUNetTrainerFinetune(nnUNetTrainer):
                     torch.save(head.state_dict(), os.path.join(target_dir, f'{name}_head.pth'))
             elif hasattr(mod, 'head'):
                 torch.save(mod.head.state_dict(), os.path.join(target_dir, 'head.pth'))
-

@@ -236,59 +236,63 @@ class nnUNetPredictor(object):
 
         # recover class names from head file names and load their weights
         head_state_dicts: Dict[str, dict] = {}
+        class_names: List[str] = []
         for hp in head_paths:
             cname = os.path.basename(hp).replace("_head.pth", "")
-            head_state_dicts[cname] = torch.load(hp, map_location="cpu")
+            if cname in head_state_dicts:
+                raise RuntimeError(
+                    f"Duplicate head name '{cname}' detected in head_paths. "
+                    f"Each head file name must be unique."
+                )
+            sd = torch.load(hp, map_location="cpu")
+            legacy_prefixes = ("transpconv.", "stage.", "seg_layer.")
+            if any(any(k.startswith(prefix) for prefix in legacy_prefixes) for k in sd.keys()):
+                raise RuntimeError(
+                    f"Head checkpoint {hp} for '{cname}' uses the legacy multi-block format "
+                    f"(transpconv/stage/seg_layer). This codebase only supports the new 1x1 head format. "
+                    f"Please retrain or re-export head weights."
+                )
+            allowed_keys = {"weight", "bias"}
+            unsupported_keys = [k for k in sd.keys() if k not in allowed_keys]
+            if unsupported_keys or "weight" not in sd:
+                raise RuntimeError(
+                    f"Head checkpoint {hp} for '{cname}' has invalid keys. "
+                    f"Expected only 'weight' and optional 'bias'. Got keys: {list(sd.keys())}."
+                )
+            head_state_dicts[cname] = sd
+            class_names.append(cname)
 
-        # determine class order from available heads (sorted for determinism)
-        class_names_sorted: List[str] = sorted(head_state_dicts.keys())
+        if len(class_names) == 0:
+            raise RuntimeError("No head files were provided. head_paths must contain at least one *_head.pth file.")
 
-        # categorize classes to mimic previous ordering logic
-        memb_classes = sorted([cn for cn in class_names_sorted if cn.endswith("_memb")])
-        base_with_memb = sorted(
-            [
-                cn
-                for cn in class_names_sorted
-                if not cn.endswith("_memb") and cn != "membrane" and f"{cn}_memb" in class_names_sorted
-            ]
-        )
-        others = sorted(
-            [
-                cn
-                for cn in class_names_sorted
-                if cn not in base_with_memb and cn != "membrane" and not cn.endswith("_memb")
-            ]
-        )
-
-        # reorder class names to follow existing region ordering
-        class_names: List[str] = (
-            base_with_memb
-            + (["membrane"] if "membrane" in class_names_sorted else [])
-            + memb_classes
-            + others
-        )
-
-        # build dataset json describing channels and labels in the new order
+        # build dataset json and keep class/channel order identical to head_paths order
         label_ids = {cn: i + 1 for i, cn in enumerate(class_names)}
         labels: Dict[str, Union[int, List[int]]] = {"background": 0}
+        memb_classes = [cn for cn in class_names if cn.endswith("_memb")]
 
-        for cn in base_with_memb:
+        for cn in class_names:
+            if cn == "membrane":
+                membrane_region = [label_ids["membrane"]] + [label_ids[m] for m in memb_classes]
+                seen = set()
+                dedup = []
+                for v in membrane_region:
+                    if v not in seen:
+                        seen.add(v)
+                        dedup.append(v)
+                labels[cn] = dedup if len(dedup) > 1 else dedup[0]
+                continue
+
+            if cn.endswith("_memb"):
+                labels[cn] = label_ids[cn]
+                continue
+
             memb_name = f"{cn}_memb"
             if memb_name in label_ids:
                 labels[cn] = [label_ids[cn], label_ids[memb_name]]
             else:
                 labels[cn] = label_ids[cn]
 
-        if "membrane" in class_names:
-            labels["membrane"] = [label_ids["membrane"]] + [label_ids[m] for m in memb_classes]
-
-        for cn in memb_classes:
-            labels[cn] = label_ids[cn]
-
-        for cn in others:
-            labels[cn] = label_ids[cn]
-
-        regions_class_order: List[int] = list(range(1, len(class_names) + 1))
+        regions_class_order: List[int] = [label_ids[cn] for cn in class_names]
 
         dataset_json = {
             "channel_names": {"0": "cryoET"},
@@ -1352,5 +1356,4 @@ if __name__ == '__main__':
         [['/media/isensee/raw_data/nnUNet_raw/Dataset004_Hippocampus/imagesTs/hippocampus_002_0000.nii.gz'], ['/media/isensee/raw_data/nnUNet_raw/Dataset004_Hippocampus/imagesTs/hippocampus_005_0000.nii.gz']],
         '/home/isensee/temp/tmp', False, True, None
     )
-
 
