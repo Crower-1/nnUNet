@@ -100,7 +100,7 @@ class PlainConvUNetHead(PlainConvUNet):
         for s in range(len(self.encoder.strides) - 1):
             skip_sizes.append([i // j for i, j in zip(input_size, self.encoder.strides[s])])
             input_size = skip_sizes[-1]
-        assert len(skip_sizes) == len(self.decoder.stages) + 1
+        assert len(skip_sizes) == len(self.decoder.stages)
 
         output = np.int64(0)
         for s in range(len(self.decoder.stages)):
