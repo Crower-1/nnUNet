@@ -48,7 +48,7 @@ class ConfigurationManager(object):
                 network_class_name = "dynamic_network_architectures.architectures.residual_unet.ResidualEncoderUNet"
             else:
                 raise RuntimeError(f'Unknown architecture {unet_class_name}. This conversion only supports '
-                                   f'PlainConvUNet and ResidualEncoderUNet')
+                                   f'PlainConvUNet, PlainConvUNetHead and ResidualEncoderUNet')
 
             n_stages = len(self.configuration["n_conv_per_stage_encoder"])
 
@@ -56,7 +56,8 @@ class ConfigurationManager(object):
             conv_op = convert_dim_to_conv_op(dim)
             instnorm = get_matching_instancenorm(dimension=dim)
 
-            convs_or_blocks = "n_conv_per_stage" if unet_class_name == "PlainConvUNet" else "n_blocks_per_stage"
+            convs_or_blocks = "n_conv_per_stage" if unet_class_name in ("PlainConvUNet", "PlainConvUNetHead") \
+                else "n_blocks_per_stage"
 
             arch_dict = {
                 'network_class_name': network_class_name,
@@ -265,15 +266,21 @@ class PlansManager(object):
 
     def get_configuration(self, configuration_name: str, dataset_json: dict = None):
         configuration_dict = deepcopy(self._get_configuration_cached(configuration_name))
-        arch_kwargs = configuration_dict['architecture']['arch_kwargs']
-        if dataset_json is not None and 'class_names' not in arch_kwargs:
-            # Fallback for old plans: derive class names from dataset_json labels
-            arch_kwargs['class_names'] = [
-                k for k in dataset_json['labels'].keys() if k != 'ignore'
-            ]
-        # If dataset_json is None we leave arch_kwargs untouched; the network will
-        # generate generic "class_X" names, preserving backward compatibility.
-        return ConfigurationManager(configuration_dict)
+        configuration_manager = ConfigurationManager(configuration_dict)
+        architecture = configuration_manager.configuration.get('architecture', {})
+        arch_kwargs = architecture.get('arch_kwargs', {})
+        network_class_name = architecture.get('network_class_name', '')
+        if dataset_json is not None and network_class_name.endswith('.PlainConvUNetHead') \
+                and 'class_names' not in arch_kwargs:
+            label_manager = self.get_label_manager(dataset_json)
+            if label_manager.has_regions:
+                class_names = [k for k in dataset_json['labels'].keys() if k not in ('background', 'ignore')]
+            else:
+                class_names = [k for k in dataset_json['labels'].keys() if k != 'ignore']
+            if len(class_names) != label_manager.num_segmentation_heads:
+                raise RuntimeError('Number of class names does not match number of segmentation heads')
+            arch_kwargs['class_names'] = class_names
+        return configuration_manager
 
     @property
     def dataset_name(self) -> str:

@@ -19,6 +19,23 @@ from nnunetv2.imageio.base_reader_writer import BaseReaderWriter
 import mrcfile
 from batchgenerators.utilities.file_and_folder_operations import isfile, split_path, join
 
+
+def _voxel_size_to_spacing(voxel_size) -> Tuple[float, float, float]:
+    if voxel_size is None or not hasattr(voxel_size, 'x'):
+        return 1.0, 1.0, 1.0
+    x = float(voxel_size['x']) if voxel_size['x'] > 0 else 1.0
+    y = float(voxel_size['y']) if voxel_size['y'] > 0 else 1.0
+    z = float(voxel_size['z']) if voxel_size['z'] > 0 else 1.0
+    return z, y, x
+
+
+def _spacing_to_voxel_size(spacing: Union[List[float], Tuple[float, ...]]) -> Tuple[float, float, float]:
+    if not isinstance(spacing, (list, tuple)) or len(spacing) != 3:
+        raise ValueError(f"Spacing must be a tuple/list of three floats. Provided spacing: {spacing}")
+    z, y, x = spacing
+    return float(x), float(y), float(z)
+
+
 class MRCIO(BaseReaderWriter):
     """
     Reads and writes 3D MRC images. Uses mrcfile package.
@@ -60,13 +77,9 @@ class MRCIO(BaseReaderWriter):
             voxel_size = mrc.voxel_size
             if voxel_size is None or not hasattr(voxel_size, 'x'):
                 print(f'WARNING: No valid voxel_size found in {image_fnames[0]}. Assuming spacing (1, 1, 1).')
-                spacing = (1, 1, 1)
+                spacing = (1.0, 1.0, 1.0)
             else:
-                spacing = (
-                    float(voxel_size['x']) if voxel_size['x'] > 0 else 1.0,
-                    float(voxel_size['y']) if voxel_size['y'] > 0 else 1.0,
-                    float(voxel_size['z']) if voxel_size['z'] > 0 else 1.0,
-                )
+                spacing = _voxel_size_to_spacing(voxel_size)
 
         # 验证所有图像具有相同的形状
         if not self._check_all_same([i.shape for i in images]):
@@ -90,11 +103,8 @@ class MRCIO(BaseReaderWriter):
         # 写入分割数据并设置 voxel_size
         with mrcfile.new(output_fname, overwrite=True) as mrc:
             mrc.set_data(seg.astype(np.float32, copy=False))
-            voxel_size = properties.get('spacing', (1.0, 1.0, 1.0))
-            if isinstance(voxel_size, (list, tuple)) and len(voxel_size) == 3:
-                mrc.voxel_size = voxel_size
-            else:
-                raise ValueError(f"Spacing must be a tuple of three floats. Provided spacing: {voxel_size}")
+            spacing = properties.get('spacing', (1.0, 1.0, 1.0))
+            mrc.voxel_size = _spacing_to_voxel_size(spacing)
 
         # 不再需要保存 .json 文件，因此移除相关代码
         # save_json({'spacing': properties['spacing']}, join(out_dir, file[:-(len(ending))] + '.json'))
@@ -122,16 +132,7 @@ class MRCIO(BaseReaderWriter):
                 print(f'WARNING: No valid voxel_size found in {seg_fname}. Assuming spacing (1, 1, 1).')
                 spacing = (1.0, 1.0, 1.0)
             else:
-                spacing = (
-                    float(voxel_size['x']) if voxel_size['x'] > 0 else 1.0,
-                    float(voxel_size['y']) if voxel_size['y'] > 0 else 1.0,
-                    float(voxel_size['z']) if voxel_size['z'] > 0 else 1.0,
-                )
-
-        # Ensure spacing matches (1, x, y, z)
-        spacing = (spacing[2], spacing[1], spacing[0])  # Adjust for z, y, x order
-
-
+                spacing = _voxel_size_to_spacing(voxel_size)
 
         return seg, {'spacing': spacing}
 

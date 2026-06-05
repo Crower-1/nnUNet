@@ -5,8 +5,8 @@ from typing import List, Union, Tuple
 import numpy as np
 import torch
 from batchgenerators.utilities.file_and_folder_operations import load_json, join, save_json, isfile, maybe_mkdir_p
+from dynamic_network_architectures.architectures.unet import PlainConvUNet
 from dynamic_network_architectures.building_blocks.helper import convert_dim_to_conv_op, get_matching_instancenorm
-from nnunetv2.network_architecture.plainconv_unet_head import PlainConvUNetHead
 
 from nnunetv2.configuration import ANISO_THRESHOLD
 from nnunetv2.experiment_planning.experiment_planners.network_topology import get_pool_and_conv_props
@@ -18,7 +18,6 @@ from nnunetv2.utilities.dataset_name_id_conversion import maybe_convert_to_datas
 from nnunetv2.utilities.default_n_proc_DA import get_allowed_n_proc_DA
 from nnunetv2.utilities.get_network_from_plans import get_network_from_plans
 from nnunetv2.utilities.json_export import recursive_fix_for_json_export
-from nnunetv2.utilities.label_handling.label_handling import LabelManager
 from nnunetv2.utilities.utils import get_filenames_of_train_images_and_targets
 
 
@@ -49,7 +48,7 @@ class ExperimentPlanner(object):
         self.anisotropy_threshold = ANISO_THRESHOLD
 
         self.UNet_base_num_features = 32
-        self.UNet_class = PlainConvUNetHead
+        self.UNet_class = PlainConvUNet
         # the following two numbers are really arbitrary and were set to reproduce nnU-Net v1's configurations as
         # much as possible
         self.UNet_reference_val_3d = 560000000  # 455600128  550000000
@@ -99,7 +98,7 @@ class ExperimentPlanner(object):
                                    arch_kwargs: dict,
                                    arch_kwargs_req_import: Tuple[str, ...]):
         """
-        Works for PlainConvUNetHead, PlainConvUNet, ResidualEncoderUNet
+        Works for PlainConvUNet, ResidualEncoderUNet
         """
         a = torch.get_num_threads()
         torch.set_num_threads(get_allowed_n_proc_DA())
@@ -298,24 +297,13 @@ class ExperimentPlanner(object):
             '_kw_requires_import': ('conv_op', 'norm_op', 'dropout_op', 'nonlin'),
         }
 
-        label_manager = LabelManager(self.dataset_json['labels'],
-                                     self.dataset_json.get('regions_class_order'))
-        if label_manager.has_regions:
-            class_names = [k for k in self.dataset_json['labels'].keys()
-                           if k not in ('background', 'ignore')]
-        else:
-            class_names = [k for k in self.dataset_json['labels'].keys() if k != 'ignore']
-        architecture_kwargs['arch_kwargs']['class_names'] = class_names
-        if len(class_names) != label_manager.num_segmentation_heads:
-            raise RuntimeError('Number of class names does not match number of segmentation heads')
-
         # now estimate vram consumption
         if _keygen(patch_size, pool_op_kernel_sizes) in _cache.keys():
             estimate = _cache[_keygen(patch_size, pool_op_kernel_sizes)]
         else:
             estimate = self.static_estimate_VRAM_usage(patch_size,
                                                        num_input_channels,
-                                                       label_manager.num_segmentation_heads,
+                                                       len(self.dataset_json['labels'].keys()),
                                                        architecture_kwargs['network_class_name'],
                                                        architecture_kwargs['arch_kwargs'],
                                                        architecture_kwargs['_kw_requires_import'],
@@ -372,7 +360,7 @@ class ExperimentPlanner(object):
                 estimate = self.static_estimate_VRAM_usage(
                     patch_size,
                     num_input_channels,
-                    label_manager.num_segmentation_heads,
+                    len(self.dataset_json['labels'].keys()),
                     architecture_kwargs['network_class_name'],
                     architecture_kwargs['arch_kwargs'],
                     architecture_kwargs['_kw_requires_import'],

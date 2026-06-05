@@ -175,7 +175,7 @@ class nnUNetPredictor(object):
 
             parameters.append(checkpoint['network_weights'])
 
-            configuration_manager = plans_manager.get_configuration(configuration_name, dataset_json)
+        configuration_manager = plans_manager.get_configuration(configuration_name, dataset_json)
         # restore network
         num_input_channels = determine_num_input_channels(plans_manager, configuration_manager, dataset_json)
         trainer_class = recursive_find_python_class(join(nnunetv2.__path__[0], "training", "nnUNetTrainer"),
@@ -200,9 +200,6 @@ class nnUNetPredictor(object):
         network.load_state_dict(parameters[0])
 
         self.network = network
-
-        # initialize network with first set of parameters, also see https://github.com/MIC-DKFZ/nnUNet/issues/2520
-        network.load_state_dict(parameters[0])
 
         self.dataset_json = dataset_json
         self.trainer_name = trainer_name
@@ -1356,4 +1353,3 @@ if __name__ == '__main__':
         [['/media/isensee/raw_data/nnUNet_raw/Dataset004_Hippocampus/imagesTs/hippocampus_002_0000.nii.gz'], ['/media/isensee/raw_data/nnUNet_raw/Dataset004_Hippocampus/imagesTs/hippocampus_005_0000.nii.gz']],
         '/home/isensee/temp/tmp', False, True, None
     )
-

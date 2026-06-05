@@ -48,6 +48,11 @@ def export_pretrained_model(dataset_name_or_id: Union[int, str], output_file: st
                 head_files = subfiles(join(trainer_output_dir, fold_folder), join=True, suffix="_head.pth")
                 for hf in head_files:
                     zipf.write(hf, os.path.relpath(hf, nnUNet_results))
+                for component_dir in ("best_component_pth", "last_component_pth"):
+                    source_folder = join(trainer_output_dir, fold_folder, component_dir)
+                    if isdir(source_folder):
+                        for component_file in subfiles(source_folder, join=True, suffix=".pth"):
+                            zipf.write(component_file, os.path.relpath(component_file, nnUNet_results))
 
                 # progress.png
                 source_file = join(trainer_output_dir, fold_folder, "progress.png")
