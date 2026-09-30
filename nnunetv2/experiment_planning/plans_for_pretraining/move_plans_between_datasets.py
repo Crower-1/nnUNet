@@ -1,12 +1,11 @@
 import argparse
 from typing import Union
 
-from batchgenerators.utilities.file_and_folder_operations import join, isdir, isfile, load_json, subfiles, save_json
+from batchgenerators.utilities.file_and_folder_operations import join, isdir, isfile, load_json, save_json
 
 from nnunetv2.imageio.reader_writer_registry import determine_reader_writer_from_dataset_json
 from nnunetv2.paths import nnUNet_preprocessed, nnUNet_raw
 from nnunetv2.utilities.file_path_utilities import maybe_convert_to_dataset_name
-from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
 from nnunetv2.utilities.utils import get_filenames_of_train_images_and_targets
 
 
@@ -22,8 +21,8 @@ def move_plans_between_datasets(
         target_plans_identifier = source_plans_identifier
 
     source_folder = join(nnUNet_preprocessed, source_dataset_name)
-    assert isdir(source_folder), f"Cannot move plans because preprocessed directory of source dataset is missing. " \
-                                 f"Run nnUNetv2_plan_and_preprocess for source dataset first!"
+    assert isdir(source_folder), "Cannot move plans because preprocessed directory of source dataset is missing. " \
+                                 "Run nnUNetv2_plan_and_preprocess for source dataset first!"
 
     source_plans_file = join(source_folder, source_plans_identifier + '.json')
     assert isfile(source_plans_file), f"Source plans are missing. Run the corresponding experiment planning first! " \

@@ -36,7 +36,7 @@ class nnUNetDataLoader(DataLoader):
                          False, True, sampling_probabilities)
 
         if len(patch_size) == 2:
-            final_patch_size = (1, *patch_size)
+            final_patch_size = (1, *final_patch_size)
             patch_size = (1, *patch_size)
             self.patch_size_was_2d = True
         else:
@@ -58,9 +58,8 @@ class nnUNetDataLoader(DataLoader):
                 self.need_to_pad[d] += pad_sides[d]
         self.num_channels = None
         self.pad_sides = pad_sides
-        self.data_shape, self.seg_shape = self.determine_shapes()
         self.sampling_probabilities = sampling_probabilities
-        self.annotated_classes_key = tuple([-1] + label_manager.all_labels)
+        self.annotated_classes_key = label_manager.annotated_classes_key
         self.has_ignore = label_manager.has_ignore_label
         self.get_do_oversample = self._oversample_last_XX_percent if not probabilistic_oversampling \
             else self._probabilistic_oversampling
@@ -76,22 +75,10 @@ class nnUNetDataLoader(DataLoader):
         # print('YEAH BOIIIIII')
         return np.random.uniform() < self.oversample_foreground_percent
 
-    def determine_shapes(self):
-        # load one case
-        data, seg, seg_prev, properties = self._data.load_case(self._data.identifiers[0])
-        num_color_channels = data.shape[0]
-
-        data_shape = (self.batch_size, num_color_channels, *self.patch_size)
-        channels_seg = seg.shape[0]
-        if seg_prev is not None:
-            channels_seg += 1
-        seg_shape = (self.batch_size, channels_seg, *self.patch_size)
-        return data_shape, seg_shape
-
-    def get_bbox(self, data_shape: np.ndarray, force_fg: bool, class_locations: Union[dict, None],
+    def get_bbox(self, identifier: str, data_shape: np.ndarray, force_fg: bool,
                  overwrite_class: Union[int, Tuple[int, ...]] = None, verbose: bool = False):
-        # in dataloader 2d we need to select the slice prior to this and also modify the class_locations to only have
-        # locations for the given slice
+        # foreground sampling locations are looked up lazily through self._data.foreground_locations: we need at
+        # most a single coordinate here, so there is no point in materializing all of them
         need_to_pad = self.need_to_pad.copy()
         dim = len(data_shape)
 
@@ -112,20 +99,22 @@ class nnUNetDataLoader(DataLoader):
             bbox_lbs = [np.random.randint(lbs[i], ubs[i] + 1) for i in range(dim)]
             # print('I want a random location')
         else:
+            fg_locations = self._data.foreground_locations
             if not force_fg and self.has_ignore:
                 selected_class = self.annotated_classes_key
-                if len(class_locations[selected_class]) == 0:
+                if fg_locations.count(identifier, selected_class) == 0:
                     # no annotated pixels in this case. Not good. But we can hardly skip it here
                     warnings.warn('Warning! No annotated pixels in image!')
                     selected_class = None
             elif force_fg:
-                assert class_locations is not None, 'if force_fg is set class_locations cannot be None'
-                if overwrite_class is not None:
-                    assert overwrite_class in class_locations.keys(), 'desired class ("overwrite_class") does not ' \
-                                                                      'have class_locations (missing key)'
                 # this saves us a np.unique. Preprocessing already did that for all cases. Neat.
-                # class_locations keys can also be tuple
-                eligible_classes_or_regions = [i for i in class_locations.keys() if len(class_locations[i]) > 0]
+                # class keys can also be tuple
+                eligible_classes_or_regions = fg_locations.eligible_classes(identifier)
+                if overwrite_class is not None:
+                    # class_keys is the full key table; eligible_classes_or_regions above already populated
+                    # it on the legacy backend, which only knows the keys of the case it last read
+                    assert overwrite_class in fg_locations.class_keys, \
+                        'desired class ("overwrite_class") does not have sampling locations (missing key)'
 
                 # if we have annotated_classes_key locations and other classes are present, remove the annotated_classes_key from the list
                 # strange formulation needed to circumvent
@@ -150,12 +139,10 @@ class nnUNetDataLoader(DataLoader):
                 raise RuntimeError('lol what!?')
 
             if selected_class is not None:
-                voxels_of_that_class = class_locations[selected_class]
-                selected_voxel = voxels_of_that_class[np.random.choice(len(voxels_of_that_class))]
+                selected_voxel = fg_locations.sample(identifier, selected_class)
                 # selected voxel is center voxel. Subtract half the patch size to get lower bbox voxel.
                 # Make sure it is within the bounds of lb and ub
-                # i + 1 because we have first dimension 0!
-                bbox_lbs = [max(lbs[i], selected_voxel[i + 1] - self.patch_size[i] // 2) for i in range(dim)]
+                bbox_lbs = [max(lbs[i], selected_voxel[i] - self.patch_size[i] // 2) for i in range(dim)]
             else:
                 # If the image does not contain any foreground classes, we fall back to random cropping
                 bbox_lbs = [np.random.randint(lbs[i], ubs[i] + 1) for i in range(dim)]
@@ -166,61 +153,63 @@ class nnUNetDataLoader(DataLoader):
 
     def generate_train_batch(self):
         selected_keys = self.get_indices()
-        # preallocate memory for data and seg
-        data_all = np.zeros(self.data_shape, dtype=np.float32)
-        seg_all = np.zeros(self.seg_shape, dtype=np.int16)
+        # preallocate output tensors in final patch size and write transformed samples directly
+        data_all = None
+        seg_all = None
 
-        for j, i in enumerate(selected_keys):
-            # oversampling foreground will improve stability of model training, especially if many patches are empty
-            # (Lung for example)
-            force_fg = self.get_do_oversample(j)
+        with torch.no_grad():
+            with threadpool_limits(limits=1, user_api=None):
+                for j, i in enumerate(selected_keys):
+                    # oversampling foreground will improve stability of model training, especially if many patches are empty
+                    # (Lung for example)
+                    force_fg = self.get_do_oversample(j)
 
-            data, seg, seg_prev, properties = self._data.load_case(i)
+                    data, seg, seg_prev = self._data.load_case(i)
 
-            # If we are doing the cascade then the segmentation from the previous stage will already have been loaded by
-            # self._data.load_case(i) (see nnUNetDataset.load_case)
-            shape = data.shape[1:]
+                    # If we are doing the cascade then the segmentation from the previous stage will already have been loaded by
+                    # self._data.load_case(i) (see nnUNetDataset.load_case)
+                    shape = data.shape[1:]
 
-            bbox_lbs, bbox_ubs = self.get_bbox(shape, force_fg, properties['class_locations'])
-            bbox = [[i, j] for i, j in zip(bbox_lbs, bbox_ubs)]
+                    bbox_lbs, bbox_ubs = self.get_bbox(i, shape, force_fg)
+                    bbox = [[i, j] for i, j in zip(bbox_lbs, bbox_ubs)]
 
-            # use ACVL utils for that. Cleaner.
-            data_all[j] = crop_and_pad_nd(data, bbox, 0)
+                    data_cropped = torch.from_numpy(crop_and_pad_nd(data, bbox, 0)).float()
+                    seg_cropped = torch.from_numpy(crop_and_pad_nd(seg, bbox, -1, cast_cropped_to=np.int16)).to(torch.int16)
+                    if seg_prev is not None:
+                        seg_prev_cropped = torch.from_numpy(crop_and_pad_nd(seg_prev, bbox, -1, cast_cropped_to=np.int16)).to(torch.int16)
+                        seg_cropped = torch.cat((seg_cropped, seg_prev_cropped[None]), dim=0)
 
-            seg_cropped = crop_and_pad_nd(seg, bbox, -1)
-            if seg_prev is not None:
-                seg_cropped = np.vstack((seg_cropped, crop_and_pad_nd(seg_prev, bbox, -1)[None]))
-            seg_all[j] = seg_cropped
+                    if self.patch_size_was_2d:
+                        data_cropped = data_cropped[:, 0]
+                        seg_cropped = seg_cropped[:, 0]
 
-        if self.patch_size_was_2d:
-            data_all = data_all[:, :, 0]
-            seg_all = seg_all[:, :, 0]
-
-        if self.transforms is not None:
-            with torch.no_grad():
-                with threadpool_limits(limits=1, user_api=None):
-                    data_all = torch.from_numpy(data_all).float()
-                    seg_all = torch.from_numpy(seg_all).to(torch.int16)
-                    images = []
-                    segs = []
-                    for b in range(self.batch_size):
-                        tmp = self.transforms(**{'image': data_all[b], 'segmentation': seg_all[b]})
-                        images.append(tmp['image'])
-                        segs.append(tmp['segmentation'])
-                    data_all = torch.stack(images)
-                    if isinstance(segs[0], list):
-                        seg_all = [torch.stack([s[i] for s in segs]) for i in range(len(segs[0]))]
+                    if self.transforms is not None:
+                        transformed = self.transforms(**{'image': data_cropped, 'segmentation': seg_cropped})
+                        data_sample = transformed['image']
+                        seg_sample = transformed['segmentation']
                     else:
-                        seg_all = torch.stack(segs)
-                    del segs, images
-            return {'data': data_all, 'target': seg_all, 'keys': selected_keys}
+                        data_sample = data_cropped
+                        seg_sample = seg_cropped
 
+                    if data_all is None:
+                        data_all = torch.empty((self.batch_size, *data_sample.shape), dtype=torch.float32)
+                    data_all[j] = data_sample
+
+                    if isinstance(seg_sample, list):
+                        if seg_all is None:
+                            seg_all = [torch.empty((self.batch_size, *s.shape), dtype=s.dtype) for s in seg_sample]
+                        for s_idx, s in enumerate(seg_sample):
+                            seg_all[s_idx][j] = s
+                    else:
+                        if seg_all is None:
+                            seg_all = torch.empty((self.batch_size, *seg_sample.shape), dtype=seg_sample.dtype)
+                        seg_all[j] = seg_sample
         return {'data': data_all, 'target': seg_all, 'keys': selected_keys}
 
 
 if __name__ == '__main__':
     folder = join(nnUNet_preprocessed, 'Dataset002_Heart', 'nnUNetPlans_3d_fullres')
-    ds = nnUNetDatasetBlosc2(folder)  # this should not load the properties!
+    ds = nnUNetDatasetBlosc2(folder)  # this does not load the properties (load_case never touches the pkl)
     pm = PlansManager(join(folder, os.pardir, 'nnUNetPlans.json'))
     lm = pm.get_label_manager(load_json(join(folder, os.pardir, 'dataset.json')))
     dl = nnUNetDataLoader(ds, 5, (16, 16, 16), (16, 16, 16), lm,

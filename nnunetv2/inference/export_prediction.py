@@ -1,14 +1,12 @@
-import os
-from copy import deepcopy
 from typing import Union, List
 
 import numpy as np
 import torch
-from acvl_utils.cropping_and_padding.bounding_boxes import bounding_box_to_slice, insert_crop_into_image
-from batchgenerators.utilities.file_and_folder_operations import load_json, isfile, save_pickle
+from acvl_utils.cropping_and_padding.bounding_boxes import insert_crop_into_image
+from batchgenerators.utilities.file_and_folder_operations import load_json, save_pickle
 
 from nnunetv2.configuration import default_num_processes
-from nnunetv2.training.dataloading.nnunet_dataset import nnUNetDatasetBlosc2
+from nnunetv2.training.dataloading.nnunet_dataset import nnUNetDatasetBlosc2, comp_blosc2_params
 from nnunetv2.utilities.label_handling.label_handling import LabelManager
 from nnunetv2.utilities.plans_handling.plans_handler import PlansManager, ConfigurationManager
 
@@ -36,7 +34,7 @@ def convert_predicted_logits_to_segmentation_with_correct_shape(predicted_logits
     # return value of resampling_fn_probabilities can be ndarray or Tensor but that does not matter because
     # apply_inference_nonlin will convert to torch
     if not return_probabilities:
-        # this has a faster computation path becasue we can skip the softmax in regular (not region based) trainig
+        # this has a faster computation path because we can skip the softmax in regular (not region based) training
         segmentation = label_manager.convert_logits_to_segmentation(predicted_logits)
     else:
         predicted_probabilities = label_manager.apply_inference_nonlin(predicted_logits)
@@ -117,6 +115,7 @@ def resample_and_save(predicted: Union[torch.Tensor, np.ndarray], target_shape: 
                       dataset_json_dict_or_file: Union[dict, str], num_threads_torch: int = default_num_processes,
                       dataset_class=None) \
         -> None:
+
     old_threads = torch.get_num_threads()
     torch.set_num_threads(num_threads_torch)
 
@@ -143,8 +142,19 @@ def resample_and_save(predicted: Union[torch.Tensor, np.ndarray], target_shape: 
     if isinstance(segmentation, torch.Tensor):
         segmentation = segmentation.cpu().numpy()
 
-    if dataset_class is None:
-        nnUNetDatasetBlosc2.save_seg(segmentation.astype(dtype=np.uint8 if len(label_manager.foreground_labels) < 255 else np.uint16), output_file)
+    if dataset_class is None or dataset_class == nnUNetDatasetBlosc2:
+        block_size, chunk_size = comp_blosc2_params(
+            (1, *segmentation.shape),
+            tuple(configuration_manager.patch_size),
+            bytes_per_pixel=1 if len(label_manager.foreground_labels) < 255 else 2
+        )
+        block_size = [int(i) for i in block_size[1:]]
+        chunk_size = [int(i) for i in chunk_size[1:]]
+        nnUNetDatasetBlosc2.save_seg(
+            segmentation.astype(dtype=np.uint8 if len(label_manager.foreground_labels) < 255 else np.uint16),
+            output_file,
+            chunks_seg=chunk_size,
+            blocks_seg=block_size)
     else:
         dataset_class.save_seg(segmentation.astype(dtype=np.uint8 if len(label_manager.foreground_labels) < 255 else np.uint16), output_file)
     torch.set_num_threads(old_threads)

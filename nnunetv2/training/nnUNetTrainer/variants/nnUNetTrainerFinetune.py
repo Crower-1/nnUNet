@@ -161,7 +161,7 @@ class nnUNetTrainerFinetune(nnUNetTrainer):
 
     def save_checkpoint(self, filename: str) -> None:
         super().save_checkpoint(filename)
-        if self.local_rank == 0 and not self.disable_checkpointing:
+        if self.global_rank == 0 and not self.disable_checkpointing:
             if self.is_ddp:
                 mod = self.network.module
             else:

@@ -4,7 +4,7 @@ from typing import Union, List, Tuple, Type
 
 import numpy as np
 import torch
-from acvl_utils.cropping_and_padding.bounding_boxes import bounding_box_to_slice, insert_crop_into_image
+from acvl_utils.cropping_and_padding.bounding_boxes import insert_crop_into_image
 from batchgenerators.utilities.file_and_folder_operations import join
 
 import nnunetv2
@@ -49,7 +49,7 @@ class LabelManager(object):
             self.inference_nonlin = inference_nonlin
 
     def _sanity_check(self, label_dict: dict):
-        if not 'background' in label_dict.keys():
+        if 'background' not in label_dict.keys():
             raise RuntimeError('Background label not declared (remember that this should be label 0!)')
         bg_label = label_dict['background']
         if isinstance(bg_label, (tuple, list)):
@@ -238,6 +238,24 @@ class LabelManager(object):
         return self.filter_background(self.all_labels)
 
     @property
+    def annotated_classes_key(self) -> Tuple[int, ...]:
+        """
+        Pseudo-class covering every *annotated* voxel, background included. Only meaningful when there is an
+        ignore label: patches without foreground still have to be drawn from annotated regions. The producer
+        of the foreground sampling locations and the dataloader that reads them must agree on this key, so it
+        is defined here rather than in either of them.
+        """
+        return tuple([-1] + self.all_labels)
+
+    @property
+    def classes_or_regions_for_sampling(self) -> List[Union[int, Tuple[int, ...]]]:
+        """Classes/regions that foreground sampling locations are collected for."""
+        collect_for_this = list(self.foreground_regions if self.has_regions else self.foreground_labels)
+        if self.has_ignore_label:
+            collect_for_this.append(self.annotated_classes_key)
+        return collect_for_this
+
+    @property
     def num_segmentation_heads(self):
         if self.has_regions:
             return len(self.foreground_regions)
@@ -284,8 +302,8 @@ def convert_labelmap_to_one_hot(segmentation: Union[np.ndarray, torch.Tensor],
         result = np.zeros((len(all_labels), *segmentation.shape),
                           dtype=output_dtype if output_dtype is not None else (np.uint8 if max(all_labels) < 255 else np.uint16))
         # variant 1, fastest in my testing
-        for i, l in enumerate(all_labels):
-            result[i] = segmentation == l
+        for i, lb in enumerate(all_labels):
+            result[i] = segmentation == lb
         # variant 2. Takes about twice as long so nah
         # result = np.eye(len(all_labels))[segmentation].transpose((3, 0, 1, 2))
     return result

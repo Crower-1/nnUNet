@@ -21,12 +21,8 @@ from batchgeneratorsv2.transforms.utils.pseudo2d import Convert3DTo2DTransform, 
 from batchgeneratorsv2.transforms.utils.random import RandomTransform
 from batchgeneratorsv2.transforms.utils.remove_label import RemoveLabelTansform
 from batchgeneratorsv2.transforms.utils.seg_to_regions import ConvertSegmentationToRegionsTransform
-from batchgenerators.dataloading.nondet_multi_threaded_augmenter import NonDetMultiThreadedAugmenter
-from batchgenerators.dataloading.single_threaded_augmenter import SingleThreadedAugmenter
 
-from nnunetv2.training.dataloading.data_loader import nnUNetDataLoader
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
-from nnunetv2.utilities.default_n_proc_DA import get_allowed_n_proc_DA
 import numpy as np
 
 
@@ -57,7 +53,10 @@ class nnUNetTrainer_DASegOrd0(nnUNetTrainer):
                 patch_size_spatial, patch_center_dist_from_border=0, random_crop=False, p_elastic_deform=0,
                 p_rotation=0.2,
                 rotation=rotation_for_DA, p_scaling=0.2, scaling=(0.7, 1.4), p_synchronize_scaling_across_axes=1,
-                bg_style_seg_sampling=False, mode_seg='nearest'
+                bg_style_seg_sampling=False,
+                mode_seg='nearest',
+                border_mode_seg='constant',
+                padding_value_seg=-1,
             )
         )
 
@@ -184,71 +183,9 @@ class nnUNetTrainer_DASegOrd0(nnUNetTrainer):
 
 
 class nnUNetTrainer_DASegOrd0_NoMirroring(nnUNetTrainer_DASegOrd0):
-    def get_dataloaders(self):
-        """
-        changed order_resampling_data, order_resampling_seg
-        """
-        # we use the patch size to determine whether we need 2D or 3D dataloaders. We also use it to determine whether
-        # we need to use dummy 2D augmentation (in case of 3D training) and what our initial patch size should be
-        patch_size = self.configuration_manager.patch_size
-
-        # needed for deep supervision: how much do we need to downscale the segmentation targets for the different
-        # outputs?
-        deep_supervision_scales = self._get_deep_supervision_scales()
-
+    def configure_rotation_dummyDA_mirroring_and_inital_patch_size(self):
         rotation_for_DA, do_dummy_2d_data_aug, initial_patch_size, mirror_axes = \
-            self.configure_rotation_dummyDA_mirroring_and_inital_patch_size()
-
-        # Deactivate mirroring data augmentation
+            super().configure_rotation_dummyDA_mirroring_and_inital_patch_size()
         mirror_axes = None
         self.inference_allowed_mirroring_axes = None
-
-        # training pipeline
-        tr_transforms = self.get_training_transforms(
-            patch_size, rotation_for_DA, deep_supervision_scales, mirror_axes, do_dummy_2d_data_aug,
-            use_mask_for_norm=self.configuration_manager.use_mask_for_norm,
-            is_cascaded=self.is_cascaded, foreground_labels=self.label_manager.all_labels,
-            regions=self.label_manager.foreground_regions if self.label_manager.has_regions else None,
-            ignore_label=self.label_manager.ignore_label)
-
-        # validation pipeline
-        val_transforms = self.get_validation_transforms(deep_supervision_scales,
-                                                        is_cascaded=self.is_cascaded,
-                                                        foreground_labels=self.label_manager.all_labels,
-                                                        regions=self.label_manager.foreground_regions if
-                                                        self.label_manager.has_regions else None,
-                                                        ignore_label=self.label_manager.ignore_label)
-
-        dataset_tr, dataset_val = self.get_tr_and_val_datasets()
-
-        # we set transforms=None because this trainer still uses batchgenerators which expects transforms to be passed to
-        dl_tr = nnUNetDataLoader(dataset_tr, self.batch_size,
-                                 initial_patch_size,
-                                 self.configuration_manager.patch_size,
-                                 self.label_manager,
-                                 oversample_foreground_percent=self.oversample_foreground_percent,
-                                 sampling_probabilities=None, pad_sides=None, transforms=None,
-                                 probabilistic_oversampling=self.probabilistic_oversampling)
-        dl_val = nnUNetDataLoader(dataset_val, self.batch_size,
-                                  self.configuration_manager.patch_size,
-                                  self.configuration_manager.patch_size,
-                                  self.label_manager,
-                                  oversample_foreground_percent=self.oversample_foreground_percent,
-                                  sampling_probabilities=None, pad_sides=None, transforms=None,
-                                  probabilistic_oversampling=self.probabilistic_oversampling)
-
-        allowed_num_processes = get_allowed_n_proc_DA()
-        if allowed_num_processes == 0:
-            mt_gen_train = SingleThreadedAugmenter(dl_tr, tr_transforms)
-            mt_gen_val = SingleThreadedAugmenter(dl_val, val_transforms)
-        else:
-            mt_gen_train = NonDetMultiThreadedAugmenter(data_loader=dl_tr, transform=tr_transforms,
-                                                        num_processes=allowed_num_processes, num_cached=6, seeds=None,
-                                                        pin_memory=self.device.type == 'cuda', wait_time=0.02)
-            mt_gen_val = NonDetMultiThreadedAugmenter(data_loader=dl_val,
-                                                      transform=val_transforms,
-                                                      num_processes=max(1, allowed_num_processes // 2),
-                                                      num_cached=3, seeds=None, pin_memory=self.device.type == 'cuda',
-                                                      wait_time=0.02)
-
-        return mt_gen_train, mt_gen_val
+        return rotation_for_DA, do_dummy_2d_data_aug, initial_patch_size, mirror_axes
