@@ -45,6 +45,8 @@ dependencies = [
     'tifffile',
     'requests',
     "nibabel",
+    "mrcfile>=1.5",
+    "py7zr>=1.0",
     "matplotlib",
     "seaborn",
     "imagecodecs",
