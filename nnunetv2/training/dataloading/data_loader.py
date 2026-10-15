@@ -156,6 +156,7 @@ class nnUNetDataLoader(DataLoader):
         # preallocate output tensors in final patch size and write transformed samples directly
         data_all = None
         seg_all = None
+        particle_valid_all = None
 
         with torch.no_grad():
             with threadpool_limits(limits=1, user_api=None):
@@ -187,6 +188,11 @@ class nnUNetDataLoader(DataLoader):
                         transformed = self.transforms(**{'image': data_cropped, 'segmentation': seg_cropped})
                         data_sample = transformed['image']
                         seg_sample = transformed['segmentation']
+                        if 'particle_valid' in transformed:
+                            validity = transformed['particle_valid']
+                            if particle_valid_all is None:
+                                particle_valid_all = torch.empty((self.batch_size, *validity.shape), dtype=torch.bool)
+                            particle_valid_all[j] = validity
                     else:
                         data_sample = data_cropped
                         seg_sample = seg_cropped
@@ -204,7 +210,10 @@ class nnUNetDataLoader(DataLoader):
                         if seg_all is None:
                             seg_all = torch.empty((self.batch_size, *seg_sample.shape), dtype=seg_sample.dtype)
                         seg_all[j] = seg_sample
-        return {'data': data_all, 'target': seg_all, 'keys': selected_keys}
+        result = {'data': data_all, 'target': seg_all, 'keys': selected_keys}
+        if particle_valid_all is not None:
+            result['particle_valid'] = particle_valid_all
+        return result
 
 
 if __name__ == '__main__':

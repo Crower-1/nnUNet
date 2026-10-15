@@ -1053,6 +1053,10 @@ class nnUNetTrainer(object):
         # lrs are the same for all workers so we don't need to gather them in case of DDP training
         self.logger.log('lrs', self.optimizer.param_groups[0]['lr'], self.current_epoch)
 
+    def _compute_loss(self, output, target, batch):
+        """Loss hook for auxiliary supervision supplied separately from semantic targets."""
+        return self.loss(output, target)
+
     def train_step(self, batch: dict) -> dict:
         data = batch['data']
         target = batch['target']
@@ -1071,7 +1075,7 @@ class nnUNetTrainer(object):
         with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
             output = self.network(data)
             # del data
-            l = self.loss(output, target)
+            l = self._compute_loss(output, target, batch)
 
         if self.grad_scaler is not None:
             self.grad_scaler.scale(l).backward()
@@ -1117,7 +1121,7 @@ class nnUNetTrainer(object):
         with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
             output = self.network(data)
             del data
-            l = self.loss(output, target)
+            l = self._compute_loss(output, target, batch)
 
         # we only need the output with the highest output resolution (if DS enabled)
         if self.enable_deep_supervision:

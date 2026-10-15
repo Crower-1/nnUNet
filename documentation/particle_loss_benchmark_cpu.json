@@ -1,0 +1,78 @@
+{
+  "synthetic": true,
+  "torch_version": "2.14.0+cu130",
+  "device": "cpu",
+  "backend": "scipy_reference",
+  "shape": [
+    2,
+    3,
+    32,
+    32,
+    32
+  ],
+  "threads": 2,
+  "repeats": 5,
+  "mapping": {
+    "schema_version": 1,
+    "targets": [
+      {
+        "label_names": [
+          "ribo"
+        ],
+        "geometry_type": "particle",
+        "label_ids": [
+          1
+        ],
+        "channels": [
+          1
+        ]
+      },
+      {
+        "label_names": [
+          "novel_particle"
+        ],
+        "geometry_type": "particle",
+        "label_ids": [
+          2
+        ],
+        "channels": [
+          2
+        ]
+      }
+    ]
+  },
+  "runs": {
+    "P0": {
+      "loss": 1.3881704807281494,
+      "forward_backward_seconds_median": 0.0011388060011086054,
+      "forward_backward_seconds": [
+        0.0015278289993148064,
+        0.0009620889995858306,
+        0.0009078720013349084,
+        0.001608111999303219,
+        0.0011388060011086054
+      ],
+      "finite_gradient": true
+    },
+    "P1": {
+      "loss": 1.7596569061279297,
+      "forward_backward_seconds_median": 0.01339285399990331,
+      "forward_backward_seconds": [
+        0.019328272001075675,
+        0.014646634999735397,
+        0.01339285399990331,
+        0.012161785998614505,
+        0.012712288000329863
+      ],
+      "finite_gradient": true,
+      "last_geometry_seconds": 0.007935061999887694,
+      "last_reduction_seconds": 0.0009114009990298655,
+      "cc_counts": [
+        63,
+        63,
+        62,
+        62
+      ]
+    }
+  }
+}
